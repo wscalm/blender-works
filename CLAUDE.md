@@ -10,8 +10,9 @@ Claude Code から Blender を操作して 3D モデリングするプロジェ�
 自分のポートフォリオサイトのデザインとして、大学時代に住んでいたワンルームを3DCGで作る。
 サイト内で部屋を360度見回せ、各家具にクリック判定を付けて自作のウェブアプリへリンクさせる。
 
-- スタイル: [felixrieseberg.com](https://felixrieseberg.com/) のような写実寄り。**夜**、明るい白色のシーリングライト (最初は電球色だったが「暗すぎる」と言われて変えた)。家具付きのワンルーム
-  (2026-10-18 にローポリから方向転換。ローポリは安っぽいとの判断)
+- スタイル: モデルは [felixrieseberg.com](https://felixrieseberg.com/) のような写実寄り (2026-10-18 にローポリから方向転換。ローポリは安っぽいとの判断)。
+  **画面は映像作家「葛飾出身」の作品のような懐かしい雰囲気** (2026-10-25。昔のゲーム (PS1) の粗い画面・VHS のにじみ・インスタントカメラのフラッシュ写真。
+  形は変えずにビューアの仕上げ `RETRO` で出す)。**夜**、明るい白色のシーリングライト (最初は電球色だったが「暗すぎる」と言われて変えた)。家具付きのワンルーム
 - 資料: 間取り図のみ (写真なし)。少しずつ作って微修正を繰り返す
 - 作成物: 部屋の外殻 + 以下のオブジェクト
   カーテン / 本棚 / ワークデスク / デスクトップPC / ベッド / テレビ台 / テレビ / ソファー / ローテーブル / ラグ
@@ -30,7 +31,7 @@ Claude Code から Blender を操作して 3D モデリングするプロジェ�
 - クリック対象の家具は、1つの親 Empty (`bookshelf`, `desk1`, `desk2`, `pc`, `monitor_main`, `monitor_sub`, `bed`, `tv_stand`, `tv`, `sofa`, `table`, `rug`, `curtain`。デスクとモニターは2台ずつ) の下に
   パーツのメッシュをぶら下げる (間に Empty を挟んでもよい。テレビ台は `tv_stand` → `tv_shelf1` → メッシュ)。Web 側は子メッシュに当たった後に親をたどって名前で判定する
 - 床・壁・天井は `room_floor` `room_wall_*` `room_ceiling` とし、クリック対象にしない
-- 照明は Blender (Cycles) で2枚に焼き付け、Web 側はリアルタイムのライトを使わない (`scripts/bake.py`)。拡散光のライトマップと、
+- 照明は Blender (Cycles) で2枚に焼き付け、Web 側はリアルタイムのライトを使わない (`scripts/bake.py`。例外はビューアの `RETRO` のフラッシュ = 目の位置の弱い点光源)。拡散光のライトマップと、
   目の位置 (`layout.VIEW`。カメラは動かないので) から見たツヤ・映り込みのグロスマップ (床に天井の明かりが映る)。
   形を変えたら必ず焼き直す (`build_all.py` が毎回やる)。glb と2枚の画像は対で使う
 - 写実寄りにするため、テクスチャ (Poly Haven の CC0 素材) と細かい形を使う。直方体は角を 4mm 面取りする (`boxes_object` の `bevel`。床・壁・天井は 0)。
@@ -135,8 +136,11 @@ WSL から Windows 版 Blender 5.2 LTS (`/mnt/c/Users/kouta/AppData/Local/Progra
   色ごとの版 `Plate` に形を描き、`v=0` で抜く。字は Windows のフォント (ロゴは似た書体を1字ずつ置く)。バーコードは商品の JAN・ITF を正しく符号にする。紙の地とインクの重ね方は `make_prints` の `_paper` `_apply_ink`
 - `tools/inspect_glb.py` — `.glb` のノード名・三角形数・半透明材質を確認する
 - `viewer/index.html` — three.js のビューア (`models/room.glb` と2枚の焼き付け画像を読む)。目の位置 `EYE` (デスク2の前の椅子、メインモニターの正面) と最初の向き `HOME_TARGET` は、glb の extras (`layout.VIEW`) で上書きされる。
-  ドラッグで見回し・ホイールでズーム・クリック判定。材質は MeshLambertMaterial (シーンにライトは無い): lightMap = 拡散光 (色 × 焼いた光) + emissiveMap = グロスマップ (ツヤを足す)。
-  仕上げ: AgX トーンマッピング (`EXPOSURE`)・bloom・色ずれ・周辺減光・フィルムノイズ (`FINISH_SHADER`)。窓の外の夜景はコードで描いた仮の物 (`makeNightSky`)。
+  ドラッグで見回し・ホイールでズーム・クリック判定。材質は MeshLambertMaterial (焼いた光で塗る): lightMap = 拡散光 (色 × 焼いた光) + emissiveMap = グロスマップ (ツヤを足す)。
+  仕上げ (既定 = `RETRO`。葛飾出身風): 3D を縦 240px ほど (`?res=`) に描いてドットのまま拡大・テクスチャを粗く (`retroTexture`)・頂点を画素の格子に合わせて揺らす (`ps1Vertex`)・
+  目の位置の弱い点光源 = フラッシュ (`?flash=`)・色合いと 15bit ディザ (`GRADE_SHADER`)・VHS のにじみと揺れ・周辺減光・粒子 (`SCREEN_SHADER`)・左上の時刻と場所 (`drawOSD` `OSD_PLACE`)・
+  RPG 風のホバーとクリックの窓 (CSS の `body.retro`。DotGothic16)・30fps (`?fps=`)・`?frame=43` で 4:3。各項目は `RETRO_CFG` (`?vhs=0` `?jitter=0` `?tex=hd` `?osd=0`)。
+  `?retro=0` で前の写実寄りの仕上げ (AgX トーンマッピング (`EXPOSURE`)・bloom・色ずれ・周辺減光・フィルムノイズ `FINISH_SHADER`)。窓の外の夜景はコードで描いた仮の物 (`makeNightSky`)。
   確認用クエリ: `?pos=X,Y` (`?pos=X,Y,高さ` も可) `?look=north` `?at=X,Y,Z` (部屋の座標の点を向く) `?pitch=度` `?exposure=3` `?tone=aces` `?post=0` (仕上げなし) `?mode=orbit` (俯瞰。V キーでも切替)。
   視野は横の角度 `HFOV_DEFAULT` (既定 100°) 基準で縦は画面比から決める (`?hfov=90` で試せる)。
   縦85° (16:9 で横約117°) にしたら魚眼のようで不快と指摘された。70° (横約102°) は「狭い」と言われた。視野角では広さを稼げないので、広くしたいなら部屋の寸法側で対応する。

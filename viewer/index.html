@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Room Viewer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #07090d;
     font-family: system-ui, "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif; }
@@ -21,6 +24,20 @@
   #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: #b9a98e;
     font: 12px ui-monospace, Consolas, monospace; letter-spacing: .3em; transition: opacity .8s; pointer-events: none; }
   body[data-ready] #loading { opacity: 0; }
+
+  /* 昔のゲームの見た目 (?retro=0 以外)。文字はドットの日本語フォント、窓は RPG の黒い窓に白い縁 */
+  body.retro canvas { image-rendering: pixelated; }
+  body.retro .panel { background: rgba(4, 6, 10, .86); color: #f3f0e6; border: 2px solid #f3f0e6; border-radius: 4px;
+    box-shadow: 0 0 0 2px rgba(4, 6, 10, .86); font: 16px/1.6 "DotGothic16", monospace; letter-spacing: .1em; }
+  body.retro #status { font-size: 13px; }
+  body.retro #hud { background: none; border: 0; box-shadow: none; padding: 0; left: 20px; bottom: 16px; font-size: 14px;
+    color: #e9e5d8; text-shadow: 2px 2px 0 #000; }
+  body.retro #tip { padding: 2px 12px 2px 8px; transform: translate(18px, 18px); }
+  body.retro #tip::before { content: "▶ "; }
+  body.retro #toast { top: auto; bottom: 9vh; min-width: min(520px, 84vw); box-sizing: border-box; padding: 14px 24px; white-space: pre-line; }
+  body.retro #loading { font: 20px "DotGothic16", monospace; color: #f3f0e6; letter-spacing: .25em; }
+  body.retro #loading::after { content: "_"; animation: blink 1s infinite; }
+  @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
 </style>
 </head>
 <body>
@@ -45,6 +62,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 
 const params = new URLSearchParams(location.search);
 
@@ -62,6 +80,23 @@ const HOME_TARGET = { x: 2.63, y: 0.22, z: 1.0 };  // 最初に向いている�
 const EXPOSURE = Number(params.get('exposure') ?? 2.6);
 const BLOOM = { strength: 0.6, radius: 0.75, threshold: 1.0 };   // threshold = トーンマッピング前の明るさ。照明のカバーだけがにじむ
 const POST = params.get('post') !== '0';                          // ?post=0 で仕上げなし (比較用)
+
+// 昔のゲームをビデオに録って、インスタントカメラで撮ったような画面 (葛飾出身の映像作品と、当時の部屋の写真 reference/IMG_7064.JPG を参考にした)。
+// ?retro=0 で前の写実寄りの仕上げに戻る。下の各項目もクエリで試せる (?res=360 ?jitter=0 ?tex=hd ?vhs=0 ?flash=0 ?fps=0 ?frame=43 ?osd=0)
+const RETRO = POST && params.get('retro') !== '0';
+const RETRO_CFG = {
+  res: Number(params.get('res') ?? 240),       // 3D を描く縦の画素数 (PS1 と同じ 240 前後)。ドットのまま整数倍に拡大する
+  jitter: params.get('jitter') !== '0',        // 頂点をその画素の格子に合わせる (見回すと縁がカクカク揺れる。PS1)
+  tex: params.get('tex') !== 'hd',             // テクスチャを粗く (縮小・15bit 色・ぼかさない)
+  texel: 0.012,                                // 繰り返しのテクスチャ (木目・布・床・壁紙) の1画素の大きさ (m)
+  vhs: params.get('vhs') !== '0',              // VHS の色のにじみ・輪郭の縁・横揺れ・下端のノイズ
+  flash: Number(params.get('flash') ?? 0.35),  // カメラのフラッシュ (目の位置の青白い点光源の強さ cd。近い物ほど明るく写る。0 で消す)
+  fps: Number(params.get('fps') ?? 30),        // 1 秒に描く回数の上限 (昔のゲームのように少しカクつく。0 で制限なし)
+  frame43: params.get('frame') === '43',       // 4:3 の画面 (左右に黒い帯。昔のテレビ)。既定は窓いっぱい
+  osd: params.get('osd') !== '0',              // 画面の左上の時刻と場所 (葛飾出身の「今日の日記」の「17:08 ごみすてば」のような表示)
+};
+const OSD_PLACE = 'じぶんのへや';
+if (RETRO) document.body.classList.add('retro');
 
 // クリックできる物。キーは glb のノード名 (= Blender の親オブジェクトの名前)。
 // url を入れるとクリックでそのページを開く。いまは動作確認用に2つだけ。
@@ -92,14 +127,29 @@ const $ = (id) => document.getElementById(id);
 const showStatus = (msg) => { const s = $('status'); s.style.display = 'block'; s.textContent += msg + '\n'; };
 if (params.has('debug')) showStatus('debug');
 addEventListener('error', (e) => showStatus('ERROR: ' + e.message));
+if (RETRO) {
+  $('loading').textContent = 'NOW LOADING';
+  $('hud').textContent = 'ドラッグ：みまわす　ホイール：ズーム　クリック：しらべる';
+}
 
+/** 3D を描く範囲の大きさ (CSS px)。?frame=43 のときは窓の中の 4:3 (左右に黒い帯) */
+function viewSize() {
+  if (!(RETRO && RETRO_CFG.frame43)) return [innerWidth, innerHeight];
+  const h = Math.min(innerHeight, Math.floor(innerWidth * 3 / 4));
+  return [Math.round(h * 4 / 3), h];
+}
 const renderer = new THREE.WebGLRenderer({ antialias: !POST, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = { agx: THREE.AgXToneMapping, aces: THREE.ACESFilmicToneMapping }[params.get('tone') ?? 'agx'];   // AgX は色が濁りにくい。?tone=aces で比較
 renderer.toneMappingExposure = EXPOSURE;
 document.body.prepend(renderer.domElement);
 const canvas = renderer.domElement;
+function resizeCanvas() {
+  const [w, h] = viewSize();
+  renderer.setSize(w, h);
+  if (RETRO && RETRO_CFG.frame43) Object.assign(canvas.style, { position: 'absolute', left: `${(innerWidth - w) >> 1}px`, top: `${(innerHeight - h) >> 1}px` });
+}
+resizeCanvas();
 
 const scene = new THREE.Scene();
 scene.background = makeNightSky();   // 出窓の外の夜景 (仮。コードで描いた街並み)
@@ -108,7 +158,7 @@ scene.background = makeNightSky();   // 出窓の外の夜景 (仮。コード�
 // 広いほど広く見えるが、105°を超えると端が引き伸ばされて魚眼のようになる (横117°相当では不快との指摘があった)。?hfov=90 などで試せる
 const HFOV_DEFAULT = Number(params.get('hfov') ?? 100);
 let hfov = HFOV_DEFAULT;
-const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.03, 80);
+const camera = new THREE.PerspectiveCamera(60, viewSize()[0] / viewSize()[1], 0.03, 80);
 function applyFov() {
   const h = THREE.MathUtils.degToRad(hfov);
   camera.fov = THREE.MathUtils.clamp(THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(h / 2) / camera.aspect)), 30, 100);
@@ -116,6 +166,10 @@ function applyFov() {
 }
 applyFov();
 camera.rotation.order = 'YXZ';
+if (RETRO && RETRO_CFG.flash > 0) {   // 焼いた光に、目の位置からのフラッシュを少し足す (インスタントカメラの写真のように、近い物が白っぽく飛ぶ)
+  camera.add(new THREE.PointLight(0xe6edff, RETRO_CFG.flash, 0, 2));
+  scene.add(camera);
+}
 
 // 目の位置は固定 (?pos=X,Y や ?pos=X,Y,高さ で試せる)。最初は HOME_TARGET を向く (?look=north や ?at=X,Y,Z (部屋の座標の点) で上書き)
 const aim = { yaw: 0, pitch: 0 };   // ドラッグで動かす目標の向き。実際の向き (look) はここへ滑らかに追いつく
@@ -142,11 +196,19 @@ let savedPos = null;
 function applyLook() { camera.rotation.set(look.pitch, look.yaw, 0); }
 applyLook();
 
-// ---- 画面の仕上げ (トーンマッピング → にじみ → 色ずれ・周辺減光・フィルムノイズ) ------------
+// ---- 画面の仕上げ -------------------------------------------------------------------------
+// RETRO (既定):
+//   1. 3D を縦 RETRO_CFG.res 画素ほどの小さな画像に描く (アンチエイリアスなし) → にじみ (明かりの周りは赤みを帯びる) → トーンマッピング
+//   2. GRADE_SHADER: 色合い (暗い所を沈めて青緑の黒に少し浮かせる・全体を青緑へ (影ほど強く、明るい所は青白い)・色は少し鮮やか)
+//      → 15bit 色の網目のディザ (PS1)
+//   3. SCREEN_SHADER: 画面の大きさへドットのまま拡大し、左上の時刻と場所 (OSD) を重ねて VHS (色の横のにじみ・輪郭の白い縁・行ごとの横揺れ・
+//      下端のノイズ) → 周辺減光 (フラッシュで撮った写真のように中央が明るく隅が落ちる) → フィルムの粒子
+// ?retro=0: トーンマッピング → にじみ → FINISH_SHADER (色ずれ・周辺減光・フィルムノイズ)
+const FULLSCREEN_VERT = `varying vec2 vUv;
+  void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
 const FINISH_SHADER = {
   uniforms: { tDiffuse: { value: null }, time: { value: 0 }, aspect: { value: 1 } },
-  vertexShader: `varying vec2 vUv;
-    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  vertexShader: FULLSCREEN_VERT,
   fragmentShader: `uniform sampler2D tDiffuse; uniform float time; uniform float aspect; varying vec2 vUv;
     float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
     void main() {
@@ -159,17 +221,160 @@ const FINISH_SHADER = {
       gl_FragColor = vec4(c, 1.0);
     }`,
 };
-const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
-composer.addPass(new RenderPass(scene, camera));
-composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), BLOOM.strength, BLOOM.radius, BLOOM.threshold));
-composer.addPass(new OutputPass());
-const finish = new ShaderPass(FINISH_SHADER);
-composer.addPass(finish);
-function resizeComposer() {
-  composer.setPixelRatio(renderer.getPixelRatio());
-  composer.setSize(innerWidth, innerHeight);
-  finish.uniforms.aspect.value = innerWidth / innerHeight;
+const GRADE_SHADER = {
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: FULLSCREEN_VERT,
+  fragmentShader: `uniform sampler2D tDiffuse; varying vec2 vUv;
+    float bayer2(vec2 a) { a = floor(a); return fract(dot(a, vec2(0.5, a.y * 0.75))); }
+    float bayer4(vec2 a) { return bayer2(0.5 * a) * 0.25 + bayer2(a); }   // 4x4 の網目 (0〜15/16)
+    void main() {
+      vec3 c = texture2D(tDiffuse, vUv).rgb;
+      c = clamp((c - 0.035) * 1.14, 0.0, 1.0);                                // 暗い所は沈め、明るい所は少し飛ばす
+      c = mix(c, c * c * (3.0 - 2.0 * c), 0.35);                              // コントラスト (S字)
+      float l = dot(c, vec3(0.299, 0.587, 0.114));
+      c *= mix(vec3(0.8, 1.0, 0.96), vec3(0.97, 1.0, 1.02), smoothstep(0.0, 0.75, l));   // 全体を青緑へ (影ほど強く、明るい所は青白く)
+      l = dot(c, vec3(0.299, 0.587, 0.114));
+      c = mix(vec3(l), c, 1.15);                                              // 色は少し鮮やかに (90年代のビビッドな色)
+      c = mix(vec3(0.02, 0.045, 0.05), vec3(1.0), c);                         // 黒を少し浮かせる (青緑の黒。退色した写真)
+      c = floor(clamp(c, 0.0, 1.0) * 31.0 + bayer4(gl_FragCoord.xy)) / 31.0;  // 15bit 色 + 網目のディザ (PS1)
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+};
+const SCREEN_SHADER = {
+  uniforms: { tFrame: { value: null }, tOSD: { value: null }, osd: { value: 0 }, lowRes: { value: new THREE.Vector2(1, 1) },
+    outRes: { value: new THREE.Vector2(1, 1) }, time: { value: 0 }, vhs: { value: 1 }, grain: { value: 1.5 } },
+  vertexShader: FULLSCREEN_VERT,
+  fragmentShader: `uniform sampler2D tFrame; uniform sampler2D tOSD; uniform float osd; uniform vec2 lowRes; uniform vec2 outRes;
+    uniform float time; uniform float vhs; uniform float grain;
+    varying vec2 vUv;
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    vec3 toYIQ(vec3 c) { return vec3(dot(c, vec3(0.299, 0.587, 0.114)), dot(c, vec3(0.596, -0.274, -0.322)), dot(c, vec3(0.211, -0.523, 0.312))); }
+    vec3 toRGB(vec3 c) { return vec3(dot(c, vec3(1.0, 0.956, 0.621)), dot(c, vec3(1.0, -0.272, -0.647)), dot(c, vec3(1.0, -1.106, 1.703))); }
+    vec3 frame(vec2 uv) {   // 小さな画像 + 時刻と場所の字 (字も一緒に VHS でにじむ)
+      vec4 o = texture2D(tOSD, uv);
+      return toYIQ(mix(texture2D(tFrame, uv).rgb, o.rgb, o.a * osd));
+    }
+    void main() {
+      vec2 uv = vUv;
+      float f = floor(time * 15.0);                  // 揺れと粒子は 1 秒に 15 回変わる
+      float line = floor(uv.y * lowRes.y);           // 走査線 = 小さな画像の行
+      // 横揺れ: 行ごとのわずかなずれ + ゆっくり下から上へ流れる帯 (テープの伸び) + 下端のヘッドの切り替えのノイズ
+      float band = exp(-pow((fract(uv.y - time * 0.021) - 0.5) * 16.0, 2.0));
+      float bottom = smoothstep(0.016, 0.004, uv.y);
+      float dx = (hash(vec2(line, f)) - 0.5) * 0.06 + band * 0.3 * sin(line * 0.9 + time * 7.0) + bottom * (3.0 + 5.0 * hash(vec2(line, f + 7.0)));
+      uv.x += dx * vhs / lowRes.x;
+      vec2 px = vec2(1.0 / lowRes.x, 0.0);
+      vec3 c0 = frame(uv);
+      // 明るさ: 半ドットぼかしてから輪郭を強める (縁に白い線が出る)
+      float y = c0.x * 0.4 + (frame(uv - px * 0.5).x + frame(uv + px * 0.5).x) * 0.3;
+      float wide = 0.0;
+      for (int k = -3; k <= 3; k++) wide += frame(uv + px * float(k)).x;
+      y += (y - wide / 7.0) * 0.6;
+      // 色: 横に大きくにじませ、少し右へずらす
+      vec2 iq = vec2(0.0); float wsum = 0.0;
+      for (int k = -5; k <= 5; k++) { float w = 1.0 - abs(float(k)) / 6.0; iq += frame(uv + px * (float(k) * 0.8 + 1.2)).yz * w; wsum += w; }
+      vec3 c = toRGB(mix(c0, vec3(y, iq / wsum * 1.1), vhs));
+      // 周辺減光 (中央が明るく、隅が暗い)
+      vec2 d = vUv - 0.5;
+      float aspect = outRes.x / outRes.y;
+      float r = length(d * vec2(aspect, 1.0)) / length(vec2(aspect, 1.0) * 0.5);
+      c *= mix(1.05, 0.45, smoothstep(0.25, 1.05, r));
+      // フィルムの粒子 (中間の明るさで強い) と、下端のノイズの白い点
+      vec2 g = floor(gl_FragCoord.xy / grain);
+      float n = hash(g + f * 17.13) + hash(g * 1.37 + f * 5.71) - 1.0;
+      float l = dot(c, vec3(0.299, 0.587, 0.114));
+      c += n * (0.035 + 0.05 * (1.0 - abs(l - 0.45) * 1.6));
+      c = mix(c, vec3(0.8 * hash(gl_FragCoord.xy + f)), bottom * 0.4 * vhs);
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+};
+const lowSize = new THREE.Vector2(1, 1);   // RETRO で 3D を描く画像の大きさ
+const snapRes = { value: new THREE.Vector2(0, 0) };   // 頂点を合わせる格子 (0 = 合わせない)
+let composer, finish, screenQuad, osdTexture;
+if (RETRO) {
+  const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+  composer = new EffectComposer(renderer, target);
+  composer.renderToScreen = false;   // 最後に SCREEN_SHADER で画面へ拡大する
+  composer.addPass(new RenderPass(scene, camera));
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.85, 0.65);
+  [[1, 1, 1], [1, 0.97, 0.94], [1, 0.9, 0.8], [1, 0.8, 0.66], [1, 0.72, 0.56]].forEach((t, i) => bloom.bloomTintColors[i].set(...t));   // 大きなにじみほど赤み (フィルムのハレーション)
+  composer.addPass(bloom);
+  composer.addPass(new OutputPass());
+  composer.addPass(new ShaderPass(GRADE_SHADER));
+  screenQuad = new FullScreenQuad(new THREE.ShaderMaterial(SCREEN_SHADER));
+  osdTexture = new THREE.CanvasTexture(document.createElement('canvas'));   // 大きさは drawOSD で合わせる
+  screenQuad.material.uniforms.tOSD.value = osdTexture;
+  screenQuad.material.uniforms.osd.value = RETRO_CFG.osd ? 1 : 0;
+  screenQuad.material.uniforms.vhs.value = RETRO_CFG.vhs ? 1 : 0;
+} else {
+  composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+  composer.addPass(new RenderPass(scene, camera));
+  composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), BLOOM.strength, BLOOM.radius, BLOOM.threshold));
+  composer.addPass(new OutputPass());
+  finish = new ShaderPass(FINISH_SHADER);
+  composer.addPass(finish);
 }
+function resizeComposer() {
+  if (!RETRO) {
+    composer.setPixelRatio(renderer.getPixelRatio());
+    composer.setSize(innerWidth, innerHeight);
+    finish.uniforms.aspect.value = innerWidth / innerHeight;
+    return;
+  }
+  const pr = renderer.getPixelRatio(), [vw, vh] = viewSize(), W = Math.round(vw * pr), H = Math.round(vh * pr);
+  const scale = Math.max(1, Math.round(H / RETRO_CFG.res));   // 1 ドット = 整数の画素 (ドットの大きさを揃える)
+  lowSize.set(Math.ceil(W / scale), Math.ceil(H / scale));
+  composer.setPixelRatio(1);
+  composer.setSize(lowSize.x, lowSize.y);
+  const u = screenQuad.material.uniforms;
+  u.lowRes.value.copy(lowSize);
+  u.outRes.value.set(W, H);
+  u.grain.value = 1.5 * pr;
+  if (RETRO_CFG.jitter) snapRes.value.copy(lowSize);
+  drawOSD(true);
+}
+
+/** 左上の時刻と場所 (ビデオカメラの表示のように、3D の小さな画像の2倍の細かさのキャンバスにドットのフォントで描く。毎分描き直す) */
+let osdKey = '';
+function drawOSD(force = false) {
+  if (!RETRO || !RETRO_CFG.osd) return;
+  const now = new Date();
+  const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  if (!force && time === osdKey) return;
+  osdKey = time;
+  const W = lowSize.x * 2, H = lowSize.y * 2;
+  if (osdTexture.image.width !== W || osdTexture.image.height !== H) {   // 大きさが変わったら作り直す (GPU 側の画像は大きさを変えられない)
+    osdTexture.dispose();
+    const cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    osdTexture = new THREE.CanvasTexture(cv);
+    osdTexture.magFilter = osdTexture.minFilter = THREE.NearestFilter;
+    osdTexture.generateMipmaps = false;
+    screenQuad.material.uniforms.tOSD.value = osdTexture;
+  }
+  const cv = osdTexture.image;
+  const g = cv.getContext('2d', { willReadFrequently: true });
+  g.clearRect(0, 0, cv.width, cv.height);
+  g.font = '16px "DotGothic16", monospace';
+  g.textBaseline = 'top';
+  const x0 = Math.round(W * 0.04), y0 = Math.round(H * 0.05);
+  const text = (s, x, y, gap = 0) => {   // 黒い影を付けた白い字 (gap = 字の間隔を広げる)
+    for (const [dx, dy, color] of [[1, 1, '#05070a'], [0, 0, '#f2f0e6']]) {
+      g.fillStyle = color;
+      let cx = x;
+      for (const ch of s) { g.fillText(ch, cx + dx, y + dy); cx += g.measureText(ch).width + gap; }
+    }
+  };
+  text(time, x0, y0, 3);
+  g.fillStyle = '#05070a'; g.fillRect(x0 + 1, y0 + 21, 88, 1);
+  g.fillStyle = '#f2f0e6'; g.fillRect(x0, y0 + 20, 88, 1);
+  text(OSD_PLACE, x0, y0 + 25);
+  const img = g.getImageData(0, 0, cv.width, cv.height), a = img.data;   // 字の縁の半透明をなくす (ドットの字にする)
+  for (let i = 3; i < a.length; i += 4) a[i] = a[i] > 110 ? 255 : 0;
+  g.putImageData(img, 0, 0);
+  osdTexture.needsUpdate = true;
+}
+if (RETRO && RETRO_CFG.osd) document.fonts.load('16px "DotGothic16"', OSD_PLACE + '0123456789:').then(() => drawOSD(true)).catch(() => {});
 resizeComposer();
 
 // ---- モデル読み込み -----------------------------------------------------
@@ -210,9 +415,11 @@ async function loadRoom() {
     }
     world.traverse((o) => {
       if (!o.isMesh) return;
-      if (o.material.map) o.material.map.anisotropy = renderer.capabilities.getMaxAnisotropy();   // 斜めから見る床の木目をぼかさない
-      o.material = lightmap ? bakedMaterial(o.material, lightmap, info.lightmap_intensity, glossmap, info.glossmap_intensity)
-        : o.material.clone();   // ホバーで色を変えるので、メッシュごとに持たせる
+      const { map, emissiveMap } = o.material;
+      if (RETRO && RETRO_CFG.tex) [map, emissiveMap].forEach(retroTexture);
+      else if (map) map.anisotropy = renderer.capabilities.getMaxAnisotropy();   // 斜めから見る床の木目をぼかさない
+      o.material = ps1Vertex(lightmap ? bakedMaterial(o.material, lightmap, info.lightmap_intensity, glossmap, info.glossmap_intensity)
+        : o.material.clone());   // ホバーで色を変えるので、メッシュごとに持たせる
       o.userData.baseColor = o.material.color.clone();
     });
     ceiling = ['room_ceiling', 'room_ceiling_light'].map((n) => world.getObjectByName(n)).filter(Boolean);
@@ -229,7 +436,7 @@ async function loadRoom() {
 }
 
 /** glb の材質 (MeshStandardMaterial) を、焼いた光で塗る材質に置き換える。
- *  見た目 = 色 × テクスチャ × lightmap (拡散光) + glossmap (目の位置から見たツヤ・映り込み)。シーンにライトは置かない */
+ *  見た目 = 色 × テクスチャ × lightmap (拡散光) + glossmap (目の位置から見たツヤ・映り込み)。ライトは RETRO のフラッシュ (カメラの点光源) だけ */
 function bakedMaterial(src, lightmap, intensity, glossmap, glossIntensity) {
   if (src.transparent) {   // ガラス: 夜は外の暗さがほぼ素通しに見える。型板ガラス (すりガラス) は部屋の明かりを少し返す灰色
     if (src.name.includes('frosted')) return new THREE.MeshBasicMaterial({ color: 0x39414a, transparent: true, opacity: 0.85, depthWrite: false });
@@ -239,13 +446,61 @@ function bakedMaterial(src, lightmap, intensity, glossmap, glossIntensity) {
     return new THREE.MeshBasicMaterial({ color: src.emissive.clone().multiplyScalar(src.emissiveIntensity), map: src.emissiveMap });
   }
   // three.js の lightMap は 色 × テクスチャ × lightMap × lightMapIntensity / π。焼いた値は「照度/π を intensity で割った物」なので π を掛ける。
-  // ツヤは emissiveMap (自分で光る分) として足す。ライトが無いので、Lambert の陰影の計算は lightMap だけになる
+  // ツヤは emissiveMap (自分で光る分) として足す。ライトは RETRO のフラッシュだけなので、Lambert の陰影の計算は lightMap (+ フラッシュ) になる
   return new THREE.MeshLambertMaterial({
     color: src.color, map: src.map, lightMap: lightmap, lightMapIntensity: intensity * Math.PI,
     emissive: glossmap ? new THREE.Color(glossIntensity, glossIntensity, glossIntensity) : 0x000000, emissiveMap: glossmap,
     side: src.side,   // 裏も描くのは glb で doubleSided の物 (カーテン) だけ
     dithering: true,
   });
+}
+
+/** RETRO: テクスチャを昔のゲームのように粗くする (縮小 → 15bit 色 → ぼかさずに拡大。ミップマップもなし)。
+ *  繰り返しの素材 (木目・布・床・壁紙。画像の名前が _1k/_2k か、glb で繰り返しの倍率がある物) は 1 画素 ≈ RETRO_CFG.texel m、
+ *  印刷 (本の背・箱・絵・画面) は元の 1/4。同じ画像を使うテクスチャは画像 (source) を共有しているので、画像ごとに1回だけ作る */
+const retroSources = new Set();
+function retroTexture(tex) {
+  if (!tex) return;
+  const src = tex.source;
+  if (!retroSources.has(src)) {
+    retroSources.add(src);
+    const img = src.data, w0 = img.width, h0 = img.height;
+    const tiled = tex.repeat.x !== 1 || /_\dk$/.test(tex.name);
+    const size = tiled ? THREE.MathUtils.clamp(Math.round(1 / tex.repeat.x / RETRO_CFG.texel), 32, 256)
+      : THREE.MathUtils.clamp(Math.round(Math.max(w0, h0) / 4), 128, 512);
+    const s = Math.min(1, size / Math.max(w0, h0));
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(w0 * s)); cv.height = Math.max(1, Math.round(h0 * s));
+    const g = cv.getContext('2d', { willReadFrequently: true });
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(img, 0, 0, cv.width, cv.height);
+    const d = g.getImageData(0, 0, cv.width, cv.height), a = d.data;
+    for (let i = 0; i < a.length; i++) if ((i & 3) !== 3) a[i] = Math.round(a[i] * 31 / 255) * 255 / 31;   // 15bit 色 (1 色 32 段)
+    g.putImageData(d, 0, 0);
+    img.close?.();   // 元の画像 (ImageBitmap) はもう使わない
+    src.data = cv;
+    src.needsUpdate = true;
+  }
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestMipmapNearestFilter;   // 遠くはミップマップ (無いと細かい印刷や木目がゴマ塩のノイズになる)
+  tex.generateMipmaps = true;
+  tex.anisotropy = 1;
+  tex.needsUpdate = true;
+}
+
+/** RETRO: 頂点を小さな画像の画素の格子に合わせる (PS1 のように、見回すと形の縁がカクカク揺れる) */
+function ps1Vertex(m) {
+  if (!RETRO || !RETRO_CFG.jitter) return m;
+  m.onBeforeCompile = (shader) => {
+    shader.uniforms.snapRes = snapRes;
+    shader.vertexShader = 'uniform vec2 snapRes;\n' + shader.vertexShader.replace('#include <project_vertex>', `#include <project_vertex>
+      if (snapRes.x > 0.0 && gl_Position.w > 0.0) {
+        vec2 grid = snapRes * 0.5;
+        gl_Position.xy = floor(gl_Position.xy / gl_Position.w * grid + 0.5) / grid * gl_Position.w;
+      }`);
+  };
+  m.customProgramCacheKey = () => 'ps1';
+  return m;
 }
 
 /** 出窓の外に見える夜景 (仮)。正距円筒の画像に、夜空・建物の影・明かりの点いた窓・街灯・電線を描く */
@@ -321,19 +576,20 @@ function pick(clientX, clientY) {
 /** 動作確認用: ?probe=ノード名 でその中心を、?probe=u,v で画面上の点をクリック判定する */
 function runProbe(arg) {
   const node = world.getObjectByName(arg);
+  const r = canvas.getBoundingClientRect();
   let x, y;
   if (node) {
     world.updateMatrixWorld(true);
     camera.updateMatrixWorld();
     const c = new THREE.Box3().setFromObject(node).getCenter(new THREE.Vector3()).project(camera);
-    [x, y] = [(c.x + 1) / 2 * innerWidth, (1 - c.y) / 2 * innerHeight];
+    [x, y] = [r.left + (c.x + 1) / 2 * r.width, r.top + (1 - c.y) / 2 * r.height];
   } else {
     const [u, v] = arg.split(',').map(Number);
-    [x, y] = [u * innerWidth, v * innerHeight];
+    [x, y] = [r.left + u * r.width, r.top + v * r.height];
   }
   const hit = pick(x, y);
   showStatus(`probe(${arg}) -> ${hit ? hit.name : 'none'}`);
-  showStatus(`  viewport ${innerWidth}x${innerHeight}, point ${x.toFixed(0)},${y.toFixed(0)}`);
+  showStatus(`  viewport ${r.width}x${r.height}, point ${x.toFixed(0)},${y.toFixed(0)}`);
   showStatus('  hits: ' + raycaster.intersectObject(world, true).slice(0, 6).map((h) => `${h.object.name}:${h.distance.toFixed(2)}${h.object.material.transparent ? '(透明)' : ''}`).join('  '));
 }
 
@@ -360,7 +616,8 @@ function toast(msg) {
 function activate(root) {
   const c = CLICKABLE[root.name];
   if (c.url) window.open(c.url, '_blank', 'noopener');
-  else toast(`「${c.label}」をクリックしました  (リンク未設定)`);
+  if (RETRO) toast(c.url ? `${c.label}を ひらいた！` : `${c.label}を しらべた。\nしかし なにも みつからなかった。`);   // RPG の会話の窓
+  else if (!c.url) toast(`「${c.label}」をクリックしました  (リンク未設定)`);
 }
 
 // ---- 操作: ドラッグで見回す / ホイールでズーム ----------------------------
@@ -419,9 +676,9 @@ function setMode(next) {
 addEventListener('keydown', (e) => { if (e.code === 'KeyV') setMode(mode === 'fp' ? 'orbit' : 'fp'); });
 
 addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
+  resizeCanvas();
+  camera.aspect = viewSize()[0] / viewSize()[1];
   if (mode === 'fp') applyFov(); else camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
   resizeComposer();
 });
 
@@ -440,6 +697,7 @@ function updateClock() {
 }
 
 const clock = new THREE.Clock();
+let lastDraw = -1;
 renderer.setAnimationLoop(() => {
   updateClock();
   const dt = Math.min(clock.getDelta(), 0.05);
@@ -451,8 +709,28 @@ renderer.setAnimationLoop(() => {
   } else {
     orbit.update();
   }
-  finish.uniforms.time.value = clock.elapsedTime;
-  if (POST) composer.render(dt); else renderer.render(scene, camera);
+  if (RETRO) {
+    if (RETRO_CFG.fps > 0 && clock.elapsedTime - lastDraw < 1 / RETRO_CFG.fps - 0.004) return;   // 1 秒に fps 回だけ描く
+    lastDraw = clock.elapsedTime;
+    if (hovered) {   // 選んでいる家具は明るさが点滅する (昔のゲームのカーソル)
+      const k = 1.2 + 0.15 * Math.sin(clock.elapsedTime * Math.PI * 3);
+      hovered.traverse((o) => { if (o.isMesh) o.material.color.copy(o.userData.baseColor).multiplyScalar(k); });
+    }
+  }
+  if (!POST) {
+    renderer.render(scene, camera);
+  } else if (RETRO) {
+    drawOSD();
+    composer.render(dt);   // 小さな画像に描く (3D → にじみ → トーンマッピング → 色合い・ディザ)
+    const u = screenQuad.material.uniforms;
+    u.tFrame.value = composer.readBuffer.texture;
+    u.time.value = clock.elapsedTime;
+    renderer.setRenderTarget(null);
+    screenQuad.render(renderer);   // 画面へ拡大しながら VHS・周辺減光・粒子
+  } else {
+    finish.uniforms.time.value = clock.elapsedTime;
+    composer.render(dt);
+  }
 });
 loadRoom();
 </script>
