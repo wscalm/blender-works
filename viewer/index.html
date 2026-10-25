@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Room Viewer</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #07090d;
+    font-family: system-ui, "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif; }
+  canvas { display: block; touch-action: none; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+  canvas.hover { cursor: pointer; }
+  .panel { position: fixed; background: rgba(12, 12, 14, .62); color: #efe6d6; border-radius: 6px;
+    font-size: 12px; line-height: 1.7; letter-spacing: .04em; }
+  #hud { left: 12px; bottom: 12px; padding: 6px 12px; pointer-events: none; }
+  #tip { padding: 2px 8px; pointer-events: none; display: none; transform: translate(14px, 14px); }
+  #toast { left: 50%; top: 16px; transform: translateX(-50%); padding: 8px 16px; opacity: 0;
+    transition: opacity .25s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+  #status { left: 12px; top: 12px; padding: 6px 10px; display: none; white-space: pre-wrap; max-width: 60vw; }
+  #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: #b9a98e;
+    font: 12px ui-monospace, Consolas, monospace; letter-spacing: .3em; transition: opacity .8s; pointer-events: none; }
+  body[data-ready] #loading { opacity: 0; }
+</style>
+</head>
+<body>
+<div id="loading">LOADING</div>
+<div id="hud" class="panel">ドラッグ: 見回す　/　ホイール: ズーム　/　家具をクリック</div>
+<div id="tip" class="panel"></div>
+<div id="toast" class="panel"></div>
+<div id="status" class="panel"></div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+
+const params = new URLSearchParams(location.search);
+
+// ---- 設定 -------------------------------------------------------------
+const MODEL_DIR = '../models/';
+const MODEL_URL = MODEL_DIR + 'room.glb';
+const ROOM = { w: 4.7, d: 3.6, h: 2.4 };   // scripts/room_spec.py と同じ (m)
+
+// カメラは1か所に固定して、首振りだけにする。デスク2の前の椅子に座って、メインモニターに向かう目線。
+// 本当の値は scripts/layout.py の VIEW (glb の extras の eye / home_target で届く)。下は読み込む前の仮の値
+const EYE = { x: 2.63, y: 0.92, h: 1.15 };        // 部屋の座標 (X=西壁から, Y=南壁から) と目の高さ (椅子に座った目線)
+const HOME_TARGET = { x: 2.63, y: 0.22, z: 1.0 };  // 最初に向いている先 (メインモニターの真正面の少し下。両脇に PC とサブモニター)
+
+// 画面の仕上げ。exposure = 全体の明るさ (?exposure=3 で試せる)。bloom は明るい所 (照明) のにじみ
+const EXPOSURE = Number(params.get('exposure') ?? 2.6);
+const BLOOM = { strength: 0.6, radius: 0.75, threshold: 1.0 };   // threshold = トーンマッピング前の明るさ。照明のカバーだけがにじむ
+const POST = params.get('post') !== '0';                          // ?post=0 で仕上げなし (比較用)
+
+// クリックできる物。キーは glb のノード名 (= Blender の親オブジェクトの名前)。
+// url を入れるとクリックでそのページを開く。いまは動作確認用に2つだけ。
+const CLICKABLE = {
+  bed:            { label: 'ベッド',            url: null },
+  curtain:        { label: 'カーテン',          url: null },
+  sofa:           { label: 'ソファー',          url: null },
+  desk1:          { label: 'デスク1',           url: null },
+  desk2:          { label: 'デスク2',           url: null },
+  bookshelf:      { label: '本棚',              url: null },
+  tv_stand:       { label: 'テレビ台',          url: null },
+  tv:             { label: 'テレビ',            url: null },
+  pc:             { label: 'PC',                url: null },
+  monitor_main:   { label: 'メインモニター',    url: null },
+  monitor_sub:    { label: 'サブモニター',      url: null },
+  table:          { label: 'ローテーブル',      url: null },
+  rug:            { label: 'ラグ',              url: null },
+  aircon:         { label: 'エアコン (テスト)', url: null },
+  room_door_west: { label: 'ドア (テスト)',     url: null },
+};
+
+// Blender の座標 (X東, Y北, Z上) -> three.js の座標 (Y上)
+const toThree = (x, y, z = 0) => new THREE.Vector3(x, z, -y);
+const LOOK = { north: 0, west: 90, south: 180, east: -90 };   // 度。three.js の rotation.y
+
+// ---- 準備 -------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const showStatus = (msg) => { const s = $('status'); s.style.display = 'block'; s.textContent += msg + '\n'; };
+if (params.has('debug')) showStatus('debug');
+addEventListener('error', (e) => showStatus('ERROR: ' + e.message));
+
+const renderer = new THREE.WebGLRenderer({ antialias: !POST, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = { agx: THREE.AgXToneMapping, aces: THREE.ACESFilmicToneMapping }[params.get('tone') ?? 'agx'];   // AgX は色が濁りにくい。?tone=aces で比較
+renderer.toneMappingExposure = EXPOSURE;
+document.body.prepend(renderer.domElement);
+const canvas = renderer.domElement;
+
+const scene = new THREE.Scene();
+scene.background = makeNightSky();   // 出窓の外の夜景 (仮。コードで描いた街並み)
+
+// 視野は「横の角度」を基準にして、縦は画面の縦横比から決める。縦を固定すると横長のモニターほど左右が広がりすぎて魚眼になる。
+// 広いほど広く見えるが、105°を超えると端が引き伸ばされて魚眼のようになる (横117°相当では不快との指摘があった)。?hfov=90 などで試せる
+const HFOV_DEFAULT = Number(params.get('hfov') ?? 100);
+let hfov = HFOV_DEFAULT;
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.03, 80);
+function applyFov() {
+  const h = THREE.MathUtils.degToRad(hfov);
+  camera.fov = THREE.MathUtils.clamp(THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(h / 2) / camera.aspect)), 30, 100);
+  camera.updateProjectionMatrix();
+}
+applyFov();
+camera.rotation.order = 'YXZ';
+
+// 目の位置は固定 (?pos=X,Y や ?pos=X,Y,高さ で試せる)。最初は HOME_TARGET を向く (?look=north や ?at=X,Y,Z (部屋の座標の点) で上書き)
+const aim = { yaw: 0, pitch: 0 };   // ドラッグで動かす目標の向き。実際の向き (look) はここへ滑らかに追いつく
+const look = { ...aim };
+function goHome() {
+  const [px, py, ph = EYE.h] = (params.get('pos') ?? `${EYE.x},${EYE.y}`).split(',').map(Number);
+  camera.position.copy(toThree(px, py, ph));
+  const [tx, ty, tz] = params.has('at') ? params.get('at').split(',').map(Number) : [HOME_TARGET.x, HOME_TARGET.y, HOME_TARGET.z];
+  const toHome = toThree(tx, ty, tz).sub(camera.position);
+  aim.yaw = params.has('look') ? THREE.MathUtils.degToRad(LOOK[params.get('look')]) : Math.atan2(-toHome.x, -toHome.z);
+  aim.pitch = params.has('pitch') ? THREE.MathUtils.degToRad(Number(params.get('pitch')))
+    : Math.atan2(toHome.y, Math.hypot(toHome.x, toHome.z));
+  Object.assign(look, aim);
+}
+goHome();
+const PITCH_LIMIT = [-1.2, 1.0];   // 下 / 上 (rad)
+
+let mode = 'fp';                 // 'fp' = 部屋の中から見回す / 'orbit' = 俯瞰 (確認用。V キーか ?mode=orbit)
+const orbit = new OrbitControls(camera, canvas);
+orbit.enabled = false;
+orbit.enableDamping = true;
+let savedPos = null;
+
+function applyLook() { camera.rotation.set(look.pitch, look.yaw, 0); }
+applyLook();
+
+// ---- 画面の仕上げ (トーンマッピング → にじみ → 色ずれ・周辺減光・フィルムノイズ) ------------
+const FINISH_SHADER = {
+  uniforms: { tDiffuse: { value: null }, time: { value: 0 }, aspect: { value: 1 } },
+  vertexShader: `varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float time; uniform float aspect; varying vec2 vUv;
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    void main() {
+      vec2 d = vUv - 0.5;
+      vec2 ca = d * dot(d, d) * 0.014;   // 色ずれ: 画面の端ほど赤と青が外へずれる
+      vec3 c = vec3(texture2D(tDiffuse, vUv - ca).r, texture2D(tDiffuse, vUv).g, texture2D(tDiffuse, vUv + ca).b);
+      float r = length(d * vec2(aspect, 1.0)) / length(vec2(aspect, 1.0) * 0.5);   // 0 = 中心, 1 = 隅
+      c *= mix(1.0, 0.5, smoothstep(0.3, 1.05, r));                                 // 周辺減光
+      c += (hash(floor(gl_FragCoord.xy) + fract(time * 7.0) * 61.0) - 0.5) * 0.035;  // フィルムノイズ
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+};
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), BLOOM.strength, BLOOM.radius, BLOOM.threshold));
+composer.addPass(new OutputPass());
+const finish = new ShaderPass(FINISH_SHADER);
+composer.addPass(finish);
+function resizeComposer() {
+  composer.setPixelRatio(renderer.getPixelRatio());
+  composer.setSize(innerWidth, innerHeight);
+  finish.uniforms.aspect.value = innerWidth / innerHeight;
+}
+resizeComposer();
+
+// ---- モデル読み込み -----------------------------------------------------
+// 照明は Blender で焼いたライトマップ (scripts/bake.py)。見た目 = 材質の色 × ライトマップ。リアルタイムのライトは使わない。
+// ライトマップの画像名と明るさの倍率は glb の extras (Blender のシーンのカスタムプロパティ) に入っている
+let world = null, ceiling = [];   // 俯瞰のときに隠す物
+let clockHands = null;            // 壁掛け時計の針 (今の時刻に合わせて回す)
+async function loadRoom() {
+  try {
+    const gltf = await new GLTFLoader().loadAsync(MODEL_URL + '?t=' + Date.now());
+    world = gltf.scene;
+    const info = world.userData;
+    if (info.eye) {   // 目の位置と最初の向き (scripts/layout.py の VIEW)
+      [EYE.x, EYE.y, EYE.h] = info.eye;
+      [HOME_TARGET.x, HOME_TARGET.y, HOME_TARGET.z] = info.home_target;
+      goHome();
+      applyLook();
+    }
+    const bakedTexture = async (file) => {
+      const t = await new THREE.TextureLoader().loadAsync(MODEL_DIR + file + '?t=' + Date.now());
+      t.flipY = false;                    // glTF の UV と同じ向き
+      t.colorSpace = THREE.SRGBColorSpace;  // sRGB で符号化してある
+      t.channel = 1;                      // TEXCOORD_1 (lightmap の UV) を使う
+      t.generateMipmaps = false;          // 縮小で隣の島の色が混ざらないように
+      t.minFilter = THREE.LinearFilter;
+      return t;
+    };
+    let lightmap = null, glossmap = null;
+    if (info.lightmap_file) {
+      lightmap = await bakedTexture(info.lightmap_file);
+      if (info.glossmap_file) glossmap = await bakedTexture(info.glossmap_file);
+    } else {
+      showStatus('ライトマップがありません (仮の照明で表示)');
+      scene.add(new THREE.HemisphereLight(0xffffff, 0xf2eadf, 2.3));
+      const sun = new THREE.DirectionalLight(0xfff3e0, 1.1);
+      sun.position.set(-2, 5, 3);
+      scene.add(sun);
+    }
+    world.traverse((o) => {
+      if (!o.isMesh) return;
+      if (o.material.map) o.material.map.anisotropy = renderer.capabilities.getMaxAnisotropy();   // 斜めから見る床の木目をぼかさない
+      o.material = lightmap ? bakedMaterial(o.material, lightmap, info.lightmap_intensity, glossmap, info.glossmap_intensity)
+        : o.material.clone();   // ホバーで色を変えるので、メッシュごとに持たせる
+      o.userData.baseColor = o.material.color.clone();
+    });
+    ceiling = ['room_ceiling', 'room_ceiling_light'].map((n) => world.getObjectByName(n)).filter(Boolean);
+    const hands = ['clock_hour', 'clock_minute', 'clock_second'].map((n) => world.getObjectByName(n));
+    if (hands.every(Boolean)) clockHands = hands.map((o) => ({ o, base: o.quaternion.clone() }));
+    scene.add(world);
+    document.body.dataset.ready = '1';
+    if (params.has('debug')) showStatus(`loaded: ${world.children.length} top-level nodes, lightmap x${info.lightmap_intensity?.toFixed(3)}`);
+    if (params.get('mode') === 'orbit') setMode('orbit');
+    if (params.has('probe')) runProbe(params.get('probe'));
+  } catch (err) {
+    showStatus('load failed: ' + (err.message || err));
+  }
+}
+
+/** glb の材質 (MeshStandardMaterial) を、焼いた光で塗る材質に置き換える。
+ *  見た目 = 色 × テクスチャ × lightmap (拡散光) + glossmap (目の位置から見たツヤ・映り込み)。シーンにライトは置かない */
+function bakedMaterial(src, lightmap, intensity, glossmap, glossIntensity) {
+  if (src.transparent) {   // ガラス: 夜は外の暗さがほぼ素通しに見える。型板ガラス (すりガラス) は部屋の明かりを少し返す灰色
+    if (src.name.includes('frosted')) return new THREE.MeshBasicMaterial({ color: 0x39414a, transparent: true, opacity: 0.85, depthWrite: false });
+    return new THREE.MeshBasicMaterial({ color: 0x0e1726, transparent: true, opacity: 0.18, depthWrite: false });
+  }
+  if (src.emissive && src.emissive.getHex() !== 0) {   // 照明のカバー・表示ランプ・点いている画面: 自分で光る (明るさ > 1 は bloom でにじむ)
+    return new THREE.MeshBasicMaterial({ color: src.emissive.clone().multiplyScalar(src.emissiveIntensity), map: src.emissiveMap });
+  }
+  // three.js の lightMap は 色 × テクスチャ × lightMap × lightMapIntensity / π。焼いた値は「照度/π を intensity で割った物」なので π を掛ける。
+  // ツヤは emissiveMap (自分で光る分) として足す。ライトが無いので、Lambert の陰影の計算は lightMap だけになる
+  return new THREE.MeshLambertMaterial({
+    color: src.color, map: src.map, lightMap: lightmap, lightMapIntensity: intensity * Math.PI,
+    emissive: glossmap ? new THREE.Color(glossIntensity, glossIntensity, glossIntensity) : 0x000000, emissiveMap: glossmap,
+    side: src.side,   // 裏も描くのは glb で doubleSided の物 (カーテン) だけ
+    dithering: true,
+  });
+}
+
+/** 出窓の外に見える夜景 (仮)。正距円筒の画像に、夜空・建物の影・明かりの点いた窓・街灯・電線を描く */
+function makeNightSky() {
+  const W = 4096, H = 2048, hz = H / 2;   // hz = 地平線 (目の高さ)
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+
+  const sky = g.createLinearGradient(0, 0, 0, hz);   // 地平線に近いほど街明かりで赤紫に明るい
+  sky.addColorStop(0, '#04070f'); sky.addColorStop(0.6, '#0e1628'); sky.addColorStop(0.88, '#2c2638'); sky.addColorStop(1, '#5a4036');
+  g.fillStyle = sky; g.fillRect(0, 0, W, hz);
+  g.fillStyle = '#05070b'; g.fillRect(0, hz, W, H - hz);   // 地面
+
+  const buildings = (color, minW, maxW, minH, maxH, win, litRate) => {
+    for (let x = 0; x < W;) {
+      const bw = minW + rnd() * (maxW - minW), bh = minH + rnd() * (maxH - minH);
+      g.fillStyle = color; g.fillRect(x, hz - bh, bw, bh + 40);
+      for (let wy = hz - bh + win; wy < hz - win; wy += win * 1.7) {
+        for (let wx = x + win * 0.6; wx < x + bw - win; wx += win * 1.6) {
+          if (rnd() > litRate) continue;
+          const a = 0.35 + rnd() * 0.65;   // カーテン越しの暗い窓から明るい窓まで
+          g.fillStyle = rnd() < 0.75 ? `rgba(255, ${170 + rnd() * 50 | 0}, ${100 + rnd() * 50 | 0}, ${a})` : `rgba(205, 222, 255, ${a})`;
+          g.fillRect(wx, wy, win, win * 0.7);
+        }
+      }
+      x += bw + rnd() * 10;
+    }
+  };
+  buildings('#121521', 14, 60, 8, 60, 3, 0.16);     // 遠くの建物 (街明かりの前に影として見える)
+  buildings('#08090e', 50, 160, 20, 130, 6, 0.10);  // 近くのアパート・マンション
+
+  for (let i = 0; i < 40; i++) {   // 街灯
+    const x = rnd() * W, y = hz + 6 + rnd() * 30, r = 6 + rnd() * 10;
+    const glow = g.createRadialGradient(x, y, 0, x, y, r * 4);
+    glow.addColorStop(0, 'rgba(255, 214, 160, 1)'); glow.addColorStop(0.2, 'rgba(255, 170, 90, .35)'); glow.addColorStop(1, 'rgba(255, 150, 80, 0)');
+    g.fillStyle = glow; g.fillRect(x - r * 4, y - r * 4, r * 8, r * 8);
+  }
+  g.strokeStyle = '#020304'; g.lineWidth = 2;   // 電線と電柱 (北 = 画像の横 1/4 あたり)
+  for (const [x0, x1] of [[700, 1050], [1050, 1420]]) {
+    g.fillStyle = '#020304'; g.fillRect(x0 - 4, hz - 230, 8, 260); g.fillRect(x1 - 4, hz - 230, 8, 260);
+    for (const dy of [0, 14, 30]) {
+      g.beginPath(); g.moveTo(x0, hz - 222 + dy); g.quadraticCurveTo((x0 + x1) / 2, hz - 170 + dy, x1, hz - 222 + dy); g.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  return tex;
+}
+
+// ---- クリック / ホバー判定 ---------------------------------------------
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+const visible = (o) => { for (; o; o = o.parent) if (!o.visible) return false; return true; };
+
+/** 画面上の点にある「クリック可能な家具」の親ノードを返す。一番手前の面が家具でなければ null */
+function pick(clientX, clientY) {
+  if (!world) return null;
+  world.updateMatrixWorld();    // 読み込み直後・切り替え直後など、まだ描画されていなくても正しく判定する
+  camera.updateMatrixWorld();
+  const r = canvas.getBoundingClientRect();
+  ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  const hit = raycaster.intersectObject(world, true)
+    .find((h) => visible(h.object) && !h.object.material.transparent);   // ガラスは素通し
+  for (let o = hit?.object; o; o = o.parent) if (CLICKABLE[o.name]) return o;
+  return null;
+}
+
+/** 動作確認用: ?probe=ノード名 でその中心を、?probe=u,v で画面上の点をクリック判定する */
+function runProbe(arg) {
+  const node = world.getObjectByName(arg);
+  let x, y;
+  if (node) {
+    world.updateMatrixWorld(true);
+    camera.updateMatrixWorld();
+    const c = new THREE.Box3().setFromObject(node).getCenter(new THREE.Vector3()).project(camera);
+    [x, y] = [(c.x + 1) / 2 * innerWidth, (1 - c.y) / 2 * innerHeight];
+  } else {
+    const [u, v] = arg.split(',').map(Number);
+    [x, y] = [u * innerWidth, v * innerHeight];
+  }
+  const hit = pick(x, y);
+  showStatus(`probe(${arg}) -> ${hit ? hit.name : 'none'}`);
+  showStatus(`  viewport ${innerWidth}x${innerHeight}, point ${x.toFixed(0)},${y.toFixed(0)}`);
+  showStatus('  hits: ' + raycaster.intersectObject(world, true).slice(0, 6).map((h) => `${h.object.name}:${h.distance.toFixed(2)}${h.object.material.transparent ? '(透明)' : ''}`).join('  '));
+}
+
+// ホバー中の家具は少し明るくする
+const tint = (root, on) => root.traverse((o) => { if (o.isMesh) o.material.color.copy(o.userData.baseColor).multiplyScalar(on ? 1.3 : 1); });
+let hovered = null;
+function setHover(root, ev) {
+  if (root !== hovered) {
+    if (hovered) tint(hovered, false);
+    hovered = root;
+    if (root) tint(root, true);
+    canvas.classList.toggle('hover', !!root);
+  }
+  const tip = $('tip');
+  tip.style.display = root ? 'block' : 'none';
+  if (root) { tip.textContent = CLICKABLE[root.name].label; tip.style.left = ev.clientX + 'px'; tip.style.top = ev.clientY + 'px'; }
+}
+
+let toastTimer;
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+function activate(root) {
+  const c = CLICKABLE[root.name];
+  if (c.url) window.open(c.url, '_blank', 'noopener');
+  else toast(`「${c.label}」をクリックしました  (リンク未設定)`);
+}
+
+// ---- 操作: ドラッグで見回す / ホイールでズーム ----------------------------
+let drag = null;
+canvas.addEventListener('pointerdown', (e) => {
+  drag = { x: e.clientX, y: e.clientY, moved: 0 };
+  canvas.setPointerCapture(e.pointerId);
+  canvas.classList.add('dragging');
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!drag) return setHover(pick(e.clientX, e.clientY), e);
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  drag.x = e.clientX; drag.y = e.clientY; drag.moved += Math.abs(dx) + Math.abs(dy);
+  if (mode === 'fp') {
+    const k = (hfov / HFOV_DEFAULT) * 0.004;   // ズーム中は感度を下げる
+    aim.yaw += dx * k;
+    aim.pitch = THREE.MathUtils.clamp(aim.pitch + dy * k, ...PITCH_LIMIT);
+  }
+  setHover(null, e);
+});
+const endDrag = (e) => {
+  canvas.classList.remove('dragging');
+  if (drag && drag.moved < 6) { const root = pick(e.clientX, e.clientY); if (root) activate(root); }
+  drag = null;
+};
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', () => { drag = null; canvas.classList.remove('dragging'); });
+canvas.addEventListener('pointerleave', (e) => { if (!drag) setHover(null, e); });
+canvas.addEventListener('wheel', (e) => {
+  if (mode !== 'fp') return;
+  e.preventDefault();
+  hfov = THREE.MathUtils.clamp(hfov + e.deltaY * 0.05, 50, 110);
+  applyFov();
+}, { passive: false });
+
+// ---- 見回す / 俯瞰 の切り替え (俯瞰は確認用) ---------------------------------
+function setMode(next) {
+  if (next === mode) return;
+  mode = next;
+  setHover(null, { clientX: 0, clientY: 0 });
+  if (mode === 'orbit') {
+    savedPos = camera.position.clone();
+    ceiling.forEach((o) => { o.visible = false; });
+    camera.fov = 45; camera.updateProjectionMatrix();
+    camera.position.set(-1.5, 7.0, 3.5);
+    orbit.target.copy(toThree(ROOM.w / 2, ROOM.d / 2, 0.8));
+    orbit.enabled = true; orbit.update();
+  } else {
+    orbit.enabled = false;
+    ceiling.forEach((o) => { o.visible = true; });
+    camera.position.copy(savedPos);
+    applyFov();
+    applyLook();
+  }
+}
+addEventListener('keydown', (e) => { if (e.code === 'KeyV') setMode(mode === 'fp' ? 'orbit' : 'fp'); });
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  if (mode === 'fp') applyFov(); else camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  resizeComposer();
+});
+
+/** 時計の針を今の時刻にする。針は Blender のローカル +Y (glTF では -Z) まわりに回すと、正面から見て時計回り。
+ *  glb の針は焼き付けのときの時刻 (10:08:37) を向いているので、その角度を引いてから回す */
+const BAKED_TIME = [(10 + 8 / 60) / 12, 8 / 60, 37 / 60];   // scripts/furniture_clock.py と同じ
+const handTurn = new THREE.Quaternion(), handAxis = new THREE.Vector3(0, 0, 1);
+function updateClock() {
+  if (!clockHands) return;
+  const t = new Date();
+  const s = t.getSeconds(), m = t.getMinutes() + s / 60, h = (t.getHours() % 12) + m / 60;
+  [h / 12, m / 60, s / 60].forEach((f, i) => {
+    const { o, base } = clockHands[i];
+    o.quaternion.copy(base).multiply(handTurn.setFromAxisAngle(handAxis, -2 * Math.PI * (f - BAKED_TIME[i])));
+  });
+}
+
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  updateClock();
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (mode === 'fp') {
+    const a = 1 - Math.exp(-dt * 14);   // ドラッグに少し遅れて滑らかに追いつく
+    look.yaw += (aim.yaw - look.yaw) * a;
+    look.pitch += (aim.pitch - look.pitch) * a;
+    applyLook();
+  } else {
+    orbit.update();
+  }
+  finish.uniforms.time.value = clock.elapsedTime;
+  if (POST) composer.render(dt); else renderer.render(scene, camera);
+});
+loadRoom();
+</script>
+</body>
+</html>
