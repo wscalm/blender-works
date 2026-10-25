@@ -1,0 +1,13 @@
+# Python のキャッシュ (Windows の Blender と WSL の python3 が作る)
+__pycache__/
+*.pyc
+
+# Blender の作業ファイル (build_all.py が毎回作り直す。Web で使うのは room.glb と2枚の焼き付け画像) と、保存のたびにできる1つ前の版
+*.blend
+*.blend1
+
+# 確認画像 (build_all.py・closeup.py・tools/shot_viewer.sh が作り直す)
+renders/
+
+# 資料。当時の部屋の写真 (HEIC) には撮影場所の位置情報が入っている。ネットの画像 (間取り図・商品の写真) は他人の物
+reference/
