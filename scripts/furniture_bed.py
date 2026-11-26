@@ -3,7 +3,9 @@
 位置・大きさは layout.py。ローカル座標: 原点 = ベッドの中心の床 / 正面 = -Y (足元側) / 背面 = +Y (ヘッドボード側)
 構成: Empty `bed` の下に、`bed_frame` (土台・脚。ウォールナットの木目を暗くする) と `bed_headboard` (木目を薄くした画像。ユーザー指定)、
 `bed_bedding` (マットレス。土台と同じ幅と長さで、土台の上面は隠れて見えない (ユーザー指定))・
-`bed_cover` (敷きパッド: マットレスの上に掛けたグレーのタオル地。キルティングの縫い目が薄く見える (ユーザー指定))、
+`bed_cover` (敷きパッド: マットレスの上に敷いたグレーのタオル地。キルティングの縫い目が薄く見える (ユーザー指定)。
+ラグくらいの薄さ (厚さ 1.2cm。2026-10-27 ユーザー指定「もっと薄い」)。同じ日の続きの指示「少しだけ大きく、角を丸く。はみ出た部分は重力に従って垂らす」で、
+マットレスより 4cm ずつ大きい角の丸い布にして、はみ出た分をマットレスの側面へ垂らした (_draped_cover))、
 `bed_pillow` (枕。props.pillow_object)、`bed_blanket` (毛布)。
 毛布は黒のフリースで「無造作に、少し高さが出るくらい塊になっている」(ユーザー指定) ので、Blender の布のシミュレーションで、
 広げた布をベッドの上でたぐり寄せて形を作る (_messy_blanket)
@@ -24,7 +26,7 @@ COVER = "#A3A3A1"       # 敷きパッド (グレー。ユーザー指定。タ�
 PILLOW = "#2C3A55"      # 枕カバー (ネイビー。ユーザー指定)
 # 毛布: 黒のフリース (ユーザー指定)。tools/make_textures.py の blanket_fleece
 BLANKET = dict(texture="blanket_fleece_1k.jpg", texture_size=0.55)
-MATTRESS_TOP = BED_TOP - 0.01   # マットレス本体の上面 (この上に厚さ 1cm 分の敷きパッド)
+MATTRESS_TOP = BED_TOP - 0.01   # マットレス本体の上面 (この上に厚さ 1cm の敷きパッド)
 MATTRESS_BOTTOM = 0.32          # マットレスの下面 = 土台の上面 (厚さ 0.24。ユーザー指定「厚め」)
 
 
@@ -55,16 +57,18 @@ def build_bed():
         (hx - post, hx, -hy, -hy + post, 0, 0.18, dark),
     ], parent=root)
 
-    # マットレス: 土台と同じ幅と長さで、土台の上に乗る (土台の上面は見えない。ユーザー指定)。厚さ 0.24
-    # 敷きパッドは上面と、側面の上の 3cm だけを覆う (マットレスのピンクが側面に見える)。縁は丸く、上面に浅いしわ
+    # マットレス: 土台と同じ幅と長さで、土台の上に乗る (土台の上面は見えない。ユーザー指定)。厚さ 0.24。上の縁の丸みは 1.5cm
     mw = hx                    # マットレスの半幅 = 土台の半幅
     m0, m1 = -hy, yb - 0.003   # 足元の端 = 土台の足元の端 / 頭の端 = ヘッドボードの前
     soft_boxes_object("bed_bedding", [
-        (-mw, mw, m0, m1, MATTRESS_BOTTOM, MATTRESS_TOP, fabric_material("bed_mattress", "cotton", MATTRESS), 0.04, (0.003, 0.003, 0.0)),
+        (-mw, mw, m0, m1, MATTRESS_BOTTOM, MATTRESS_TOP, fabric_material("bed_mattress", "cotton", MATTRESS), 0.015, (0.003, 0.003, 0.0)),
     ], parent=root, cuts=12)
-    soft_boxes_object("bed_cover", [
-        (-mw - 0.004, mw + 0.004, m0 - 0.004, m1, MATTRESS_TOP - 0.03, BED_TOP, fabric_material("bed_cover", "towel", COVER), 0.02, (0.0, 0.0, 0.0)),
-    ], parent=root, cuts=24, wrinkle=0.003, wrinkle_size=0.5, seed=7)
+    # 毛布の布のシミュレーションがぶつかる敷きパッドは、前の形 (マットレスの上面だけに乗る、縁より 3mm 外の薄い箱) のまま
+    # (毛布の形を変えないため)。シミュレーションの後で消して、垂らした敷きパッド (_draped_cover) に置き換える。上面の高さはどちらも BED_TOP
+    cover = fabric_material("bed_cover", "towel", COVER)
+    proxy = soft_boxes_object("bed_cover", [
+        (-mw - 0.003, mw + 0.003, m0 - 0.003, m1, MATTRESS_TOP - 0.006, BED_TOP, cover, 0.007, (0.0, 0.0, 0.0)),
+    ], parent=root, cuts=24, wrinkle=0.002, wrinkle_size=0.5, seed=7)
     # 枕1つ (頭側の中央): 2枚の布を縫い合わせた形。下の面はベッドに押されて平ら
     pillow_object("bed_pillow", 0.66, 0.40, 0.11, [fabric_material("bed_pillow", "cotton", PILLOW)],
                   Matrix.Translation((0.0, 0.76, BED_TOP + 0.05)) @ Matrix.Rotation(math.radians(3), 4, 'Z'),
@@ -73,7 +77,155 @@ def build_bed():
     colliders = [bpy.data.objects[n] for n in ("bed_bedding", "bed_cover", "bed_pillow", "bed_frame", "bed_headboard", "room_floor")
                  if n in bpy.data.objects]
     _messy_blanket(root, make_material("bed_blanket", "#FFFFFF", roughness=1.0, specular=0.3, **BLANKET), colliders, hx, hy)
+    mesh = proxy.data
+    bpy.data.objects.remove(proxy)
+    bpy.data.meshes.remove(mesh)
+    _draped_cover(root, cover, mw, m0, m1)
     return root
+
+
+# 敷きパッド (_draped_cover)
+COVER_OVER = 0.04     # 広げた布がマットレスの上面の縁から外へ出る長さ (足元・左右・頭の側)。ユーザー指定「少しだけ大きく」
+# 角の丸み (広げた布を上から見た半径)。ユーザー指定「角を丸く」。垂れの長さが一定になる丸み (6.7cm) より少し大きくして、裾が角で 5mm ほど上がる
+# (10cm だと角の 6cm ほどの間で裾が 1.4cm も上がり、角が切れ込んだように見えた)
+COVER_CORNER = 0.08
+COVER_T = 0.012       # 厚さ (ラグくらい)。上面は BED_TOP なので、平らな所の下の面はマットレスに 2mm 沈む
+COVER_BEND = 0.03     # マットレスの縁で曲がる半径 (下の面)。キルティングで少し硬いので、マットレスの角の丸み (1.5cm) より大きく回る
+COVER_GAP = 0.003     # 垂れた所とマットレスの側面のすき間 (側面は真ん中が 3mm ふくらむ)
+COVER_FLARE = 5.0     # 垂れた所が下ほど外へ開く量 (垂れた長さ s に対して FLARE x s^2。裾で 2mm)
+COVER_PUFF = 0.006    # 角で余った布が外へふくらむ量 (余りの割合 1 のとき)
+COVER_HEM_WAVE = 0.003    # 裾の波打ち (外へ。最大)
+# 手で敷いたので、マットレスの真ん中からずれて少し回っている (広げた布の中心のずれ (m) と、上から見て反時計回りの角度 (度))。
+# 足元の東の側 (目から見える) の垂れが 1.5cm 長く、足元の辺は西の端ほど長い (1cm)。西の側の足元は 1.5cm 短い
+COVER_SHIFT, COVER_TURN = (0.008, -0.005), 0.4
+
+
+def _draped_cover(root, mat, mw, m0, m1):
+    """敷きパッド (2026-10-27 ユーザー指定「少しだけ大きくし、角を丸く。マットレスからはみ出た部分は重力に従って垂らす」)。
+    平らに広げると、マットレスの上面より COVER_OVER ずつ大きい、角の丸い (上から見て半径 COVER_CORNER) 厚さ COVER_T の布。
+    マットレスに乗せた形は、広げた布の各点を写して作る (drape): 上面は平ら (高さ BED_TOP)、マットレスの縁で半径 COVER_BEND で曲がり、
+    はみ出た分は側面に沿って真下へ垂れる。布の長さは変わらないので、角の丸い所ほど垂れが短く、裾は角で上がる。角では余った布が外へふくらむ。
+    手で敷いたので、真ん中から少しずれて回っている (COVER_SHIFT・COVER_TURN。垂れの長さが辺ごとに少し違う)。裾は少し波打つ。
+    頭の側はヘッドボードとのすき間へ、東の側はソファーの背とスツールの座面の中へ垂れる (押し込まれたように見える)。
+    縁は厚みの半円で丸め (パイピング)、裏へ少し回り込む。下の面 (マットレスに隠れる) は作らない。
+    UV `UVMap` (タオル地の画像) と焼き付けの島は、広げた布の上の位置 (1 = 1m。垂れた所も布の上の長さなので、模様は側面へ続く)。
+    ローカル座標はベッドと同じ (原点 = ベッドの中心の床 / -Y = 足元)"""
+    T, Rw, g, Rc = COVER_T, COVER_BEND, COVER_GAP, COVER_CORNER
+    zb = BED_TOP - T                                     # 平らな所の下の面
+    px, py0, py1 = mw + COVER_OVER, m0 - COVER_OVER, m1 + COVER_OVER   # 広げた布の範囲 (X -px〜px / Y py0〜py1)
+    fx, fy0, fy1 = mw + g - Rw, m0 - g + Rw, m1 + g - Rw   # この長方形の外で曲がり始める (曲がり終えた所が側面から g の位置)
+    arc = math.pi / 2 * Rw                               # 曲がる所の布の長さ
+    rng = random.Random(17)
+    waves = [(2 * math.pi / rng.uniform(0.18, 0.35), rng.uniform(0, math.pi), rng.uniform(0, 6.3)) for _ in range(4)]
+
+    def drape(x, y):
+        """広げた布の点 (x, y) → マットレスに乗せた布の下の面の点"""
+        cx, cy = min(max(x, -fx), fx), min(max(y, fy0), fy1)
+        dx, dy = x - cx, y - cy
+        d = math.hypot(dx, dy)
+        if d < 1e-9:
+            return Vector((x, y, zb))
+        if d <= arc:
+            s, h, z = 0.0, Rw * math.sin(d / Rw), zb - Rw * (1 - math.cos(d / Rw))
+        else:
+            s = d - arc                                  # 縁から下へ垂れた長さ
+            h, z = Rw + COVER_FLARE * s * s, zb - Rw - s
+        if abs(dx) > 1e-9 and abs(dy) > 1e-9:            # 角: 布の周の長さ (d に比例) が曲がった後の半径 h まで縮む。余った分だけ外へふくらむ
+            k = math.sin(2 * math.atan2(abs(dy), abs(dx))) ** 2
+            h += COVER_PUFF * max(0.0, 1 - h / d) * k
+        wave = sum(math.sin(f * (cx * math.cos(a) + cy * math.sin(a)) + ph) for f, a, ph in waves) / len(waves)
+        h += COVER_HEM_WAVE * wave * min(1.0, s / 0.015)
+        return Vector((cx + dx / d * h, cy + dy / d * h, z))
+
+    def normal(x, y, e=1e-4):
+        n = (drape(x + e, y) - drape(x - e, y)).cross(drape(x, y + e) - drape(x, y - e))
+        return n.normalized()
+
+    # 広げた布の格子: 縁の近くほど細かい (曲がる所と垂れる所)。角の Rc 四方は、正方形の格子を同心の円弧へ写して丸める
+    band = [b for b in (0.0, 0.003, 0.007, 0.012, 0.017, 0.022, 0.028, 0.034, 0.040, 0.046, 0.052, 0.058, 0.064, 0.070, 0.077, 0.087)
+            if b < Rc - 0.004] + [Rc]
+
+    def axis(lo, hi, step=0.08):
+        n = max(1, math.ceil((hi - lo - 2 * Rc) / step))
+        inner = [lo + Rc + (hi - lo - 2 * Rc) * k / n for k in range(1, n)]
+        return [lo + b for b in band] + inner + [hi - b for b in reversed(band)]
+    xs, ys = axis(-px, px), axis(py0, py1)
+
+    def corner_center(x, y):
+        """(x, y) が角の正方形の中なら、角の円弧の中心"""
+        if abs(x) <= px - Rc + 1e-9 or py0 + Rc - 1e-9 <= y <= py1 - Rc + 1e-9:
+            return None
+        return (math.copysign(px - Rc, x), py0 + Rc if y < py0 + Rc else py1 - Rc)
+
+    def plan(x, y):
+        c = corner_center(x, y)
+        if c is None:
+            return x, y
+        a, b = abs(x - c[0]), abs(y - c[1])
+        r = max(a, b)
+        th = math.pi / 4 * (b / a) if a >= b else math.pi / 2 - math.pi / 4 * (a / b)
+        return c[0] + math.copysign(r * math.cos(th), x - c[0]), c[1] + math.copysign(r * math.sin(th), y - c[1])
+
+    # 広げた布の上の位置 (UV もこれ) → ベッドの上の位置 (手で敷いたずれと回り)。布の中心は (0, (py0 + py1) / 2)
+    turn = math.radians(COVER_TURN)
+    ct, st, cy0 = math.cos(turn), math.sin(turn), (py0 + py1) / 2
+
+    def on_bed(x, y):
+        return (COVER_SHIFT[0] + x * ct - (y - cy0) * st, COVER_SHIFT[1] + cy0 + x * st + (y - cy0) * ct)
+
+    nu, nv = len(xs), len(ys)
+    flat = [[plan(x, y) for y in ys] for x in xs]
+    verts, seeds = [], []
+    for i in range(nu):
+        for j in range(nv):
+            x, y = flat[i][j]
+            bx, by = on_bed(x, y)
+            verts.append(drape(bx, by) + normal(bx, by) * T)   # 上の面 = 下の面から法線の向きへ厚さの分
+            seeds.append((x, y))
+    faces = [(i * nv + j, (i + 1) * nv + j, (i + 1) * nv + j + 1, i * nv + j + 1) for i in range(nu - 1) for j in range(nv - 1)]
+
+    # 縁 (裾): 外周の各点で、厚みの半円 (上の面 → 布の先 → 下の面) と、裏へ 6mm 回り込む所
+    outline = ([i * nv for i in range(nu)] + [(nu - 1) * nv + j for j in range(1, nv)] +
+               [i * nv + nv - 1 for i in range(nu - 2, -1, -1)] + [j for j in range(nv - 2, 0, -1)])   # 上から見て反時計回り
+    steps = [math.radians(b) for b in (30, 60, 90, 120, 150, 180)]
+    tail = 0.006
+    rims = []
+    for vi in outline:
+        x, y = seeds[vi]
+        c = corner_center(x, y)
+        if c is not None:
+            m = Vector((x - c[0], y - c[1])).normalized()
+        else:
+            m = Vector((1 if x > px - 1e-6 else -1 if x < -px + 1e-6 else 0, 1 if y > py1 - 1e-6 else -1 if y < py0 + 1e-6 else 0))
+        bx, by = on_bed(x, y)
+        mx, my = m.x * ct - m.y * st, m.x * st + m.y * ct   # 外向きをベッドの向きへ回す
+        b0, n0 = drape(bx, by), normal(bx, by)
+        out = (drape(bx + mx * 1e-4, by + my * 1e-4) - b0).normalized()   # 布に沿って外へ
+        ring = [vi]
+        for beta in steps:
+            ring.append(len(verts))
+            verts.append(b0 + n0 * (T / 2) * (1 + math.cos(beta)) + out * (T / 2) * math.sin(beta))
+            seeds.append((x + m.x * T / 2 * beta, y + m.y * T / 2 * beta))
+        ring.append(len(verts))
+        verts.append(drape(bx - mx * tail, by - my * tail))
+        seeds.append((x + m.x * (T / 2 * math.pi + tail), y + m.y * (T / 2 * math.pi + tail)))
+        rims.append(ring)
+    for k in range(len(rims)):
+        a, b = rims[k], rims[(k + 1) % len(rims)]
+        faces += [(b[s], a[s], a[s + 1], b[s + 1]) for s in range(len(a) - 1)]
+
+    obj = mesh_object("bed_cover", verts, faces, [mat], parent=root)
+    uv = obj.data.uv_layers.new(name="UVMap")
+    seed = obj.data.uv_layers.new(name="lightmap_seed")
+    for loop in obj.data.loops:
+        uv.data[loop.index].uv = seed.data[loop.index].uv = seeds[loop.vertex_index]
+    for poly in obj.data.polygons:
+        poly.use_smooth = True
+    obj["lightmap_uv"] = "lightmap_seed"   # bake.add_lightmap_uvs
+    zs = [v[2] for v in verts]
+    print(f"BED COVER: {len(verts)} verts, {len(faces)} faces, z {min(zs):.3f}〜{max(zs):.3f}, "
+          f"flat {2 * px:.3f} x {py1 - py0:.3f} (corner r {Rc})")
+    return obj
 
 
 BLANKET_W, BLANKET_L = 1.50, 1.90   # 毛布の大きさ

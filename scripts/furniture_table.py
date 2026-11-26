@@ -5,7 +5,8 @@
 構成: Empty `table` の下に、天板 `table_top` と脚の枠 `table_legs`。
 天板の上の小物 (写真 reference/IMG_1100): Empty `table_items` (部屋の座標のまま) の下に、南の端のティッシュの箱 `table_tissue` (白に紺の帯。
 長い辺を東西に、東の縁寄り) と飛び出たティッシュ `table_tissue_paper`・その上に斜めに置いたテレビのリモコン `table_remote`、
-西の縁 (ソファー側) のウェットティッシュのケース `table_wipes`、真ん中より少し北の東の縁に立てた黄色いタイマー `table_timer` (表示は西 = ソファー向き)
+西の縁 (ソファー側) のウェットティッシュのケース `table_wipes`、真ん中より少し北の東の縁に立てた黄色いタイマー `table_timer` (表示は西 = ソファー向き)。
+小物は天板の近い方の縁からの距離で置く (2026-10-27 にテーブルを東へ 10cm 伸ばしたとき、東の縁寄りの物は縁と一緒に動いた)
 """
 import os
 import sys
@@ -38,16 +39,20 @@ def build_table():
         legs.append((x0, x1, -iy, iy, 0, LEG, black))                                  # 床の横棒
         legs.append((x0, x1, -iy, iy, z_under - LEG, z_under, black))                  # 天板の下の横棒
     boxes_object("table_legs", legs, parent=root)
-    _items(root, e["z0"] + top)
+    # 天板の縁 (部屋の座標): 長辺が南北なので、東西 = 奥行 d・南北 = 幅 w
+    _items(root, e["z0"] + top, (e["x"] - hy, e["x"] + hy, e["y"] - hx, e["y"] + hx))
     return root
 
 
-def _items(root, z):
-    """天板 (上面の高さ z) の上の小物。部屋の座標で置く (テーブルは X 2.975〜3.325 / Y 2.075〜2.925)"""
+def _items(root, z, rim):
+    """天板 (上面の高さ z) の上の小物。部屋の座標で置く。rim = 天板の西・東・南・北の端 (今は X 2.975〜3.425 / Y 2.105〜2.955)。
+    物は近い方の縁からの距離で置く (テーブルを伸ばしたりずらしたりしても、縁との間は変わらない)。
+    東の縁寄り = ティッシュの箱とタイマー、西の縁 (ソファー側) = ウェットティッシュ"""
+    tx0, tx1, ty0, ty1 = rim
     g = world_group("table_items", root)
-    # ティッシュの箱 (24 x 11.5 x 8.5cm): 白い箱の下に紺の帯、上面の縁に水色の線と取り出し口のフィルム。
+    # ティッシュの箱 (24 x 11.5 x 8.5cm): 白い箱の下に紺の帯、上面の縁に水色の線と取り出し口のフィルム。南の端の、東の縁から 2.5cm。
     # 印刷は textures/tissue_box.jpg (tools/make_prints.py) を面ごとに貼る (画像の中の面の並びは make_prints の TISSUE_ATLAS と同じ)
-    x0, x1, y0, y1, h = 3.06, 3.30, 2.10, 2.215, 0.085
+    x0, x1, y0, y1, h = tx1 - 0.265, tx1 - 0.025, ty0 + 0.025, ty0 + 0.14, 0.085
     box = boxes_object("table_tissue", [(x0, x1, y0, y1, z, z + h, picture_material("table_tissue", "tissue_box.jpg", roughness=0.7))],
                        parent=g, bevel=0.003)
     front, side = (0, 0, 384, 136), (0, 144, 184, 280)
@@ -64,16 +69,18 @@ def _items(root, z):
     m = place(cx + 0.005, cy + 0.004, top + 0.004, yaw=28)
     solids_object("table_remote", [rot_box(-0.095, 0.095, -0.024, 0.024, 0, 0.018, remote, m, 0.006),
                                    rot_box(-0.06, 0.07, -0.016, 0.016, 0.018, 0.0195, keys, m, 0.0008)], parent=g)
-    # ウェットティッシュのケース (白、12 x 19 x 5.5cm。長い辺を南北に): 上面に水色のふた
+    # ウェットティッシュのケース (白、12 x 19 x 5.5cm。長い辺を南北に): 西の縁から 1.5cm。上面に水色のふた
     wipe = make_material("table_wipes", "#F1F2F0", roughness=0.35)
     lid = make_material("table_wipes_lid", "#A8C8E0", roughness=0.35)
+    wx, wy = tx0 + 0.015, ty0 + 0.175   # 西の端・南の端
     soft_boxes_object("table_wipes", [
-        (2.99, 3.11, 2.25, 2.44, z, z + 0.055, wipe, 0.012, (0.002, 0.002, 0.003)),
-        (3.015, 3.085, 2.30, 2.39, z + 0.052, z + 0.0615, lid, 0.004, (0.0, 0.0, 0.001)),
+        (wx, wx + 0.12, wy, wy + 0.19, z, z + 0.055, wipe, 0.012, (0.002, 0.002, 0.003)),
+        (wx + 0.025, wx + 0.095, wy + 0.05, wy + 0.14, z + 0.052, z + 0.0615, lid, 0.004, (0.0, 0.0, 0.001)),
     ], parent=g, cuts=8)
-    # 黄色いタイマー (7.5cm 角、厚み 3cm)。東の縁に立て、表示 (濃い灰色) は西 = ソファーの方
+    # 黄色いタイマー (7.5cm 角、厚み 3cm)。東の縁から 4.5cm に立て、表示 (濃い灰色) は西 = ソファーの方
     yellow = make_material("table_timer", "#F2C21B", roughness=0.35)
     lcd = make_material("table_timer_lcd", "#3A3D3A", roughness=0.2)
-    soft_boxes_object("table_timer", [(3.25, 3.28, 2.56, 2.635, z, z + 0.075, yellow, 0.008, (0.0, 0.0, 0.0))], parent=g, cuts=6)
-    boxes_object("table_timer_lcd", [(3.2485, 3.252, 2.5755, 2.6195, z + 0.012, z + 0.057, lcd, 0.001)], parent=g)
+    mx, my = tx1 - 0.075, ty0 + 0.485   # 西の端・南の端
+    soft_boxes_object("table_timer", [(mx, mx + 0.03, my, my + 0.075, z, z + 0.075, yellow, 0.008, (0.0, 0.0, 0.0))], parent=g, cuts=6)
+    boxes_object("table_timer_lcd", [(mx - 0.0015, mx + 0.002, my + 0.0155, my + 0.0595, z + 0.012, z + 0.057, lcd, 0.001)], parent=g)
     return g

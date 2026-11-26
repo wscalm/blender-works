@@ -21,6 +21,12 @@ L, R, T, B = 240, 250, 230, 230
 RW, RH = round(ROOM_W * S), round(ROOM_D * S)
 WT = round(WALL_T * S)
 W, H = L + RW + R, T + RH + B
+# デスク2の上の拡大図 (図の下に足す)。小物が多く、部屋全体の図では文字が重なるため
+ZOOM = 4
+ZS = S * ZOOM                                   # 拡大図の 1m あたりの画素数
+ZX0, ZX1, ZY0, ZY1 = 2.26, 3.54, -0.04, 0.64    # 拡大図の範囲 (部屋の座標 m)
+ZL, ZT = L - 40, H + 70                         # 拡大図の左上 (画像の画素)
+H_ALL = ZT + round((ZY1 - ZY0) * ZS) + 70
 
 C_FLOOR, C_GRID_MINOR, C_GRID, C_GRID_1M = (246, 236, 215), (238, 227, 203), (214, 199, 170), (186, 166, 130)
 C_WALL, C_TEXT, C_SUB = (72, 72, 78), (40, 40, 44), (110, 110, 118)
@@ -29,6 +35,17 @@ C_WINDOW, C_DOOR, C_CLOSET, C_ACCENT = (150, 200, 238), (222, 184, 120), (236, 2
 
 def font(size):
     return ImageFont.truetype(FONT_PATH, size)
+
+
+def Z(x, y):
+    """部屋の座標 -> 拡大図の画素"""
+    return (ZL + (x - ZX0) * ZS, ZT + (ZY1 - y) * ZS)
+
+
+def on_desk2(fur):
+    """デスク2の天板の上の物か (拡大図に描く物)"""
+    x0, y0, x1, y1 = footprint(FURNITURE["desk2"])
+    return fur.get("z0", 0) > 0.7 and x0 < fur["x"] < x1 and y0 < fur["y"] < y1
 
 
 def P(x, y):
@@ -73,7 +90,7 @@ def arrow(d, a, b, color=C_TEXT, width=3):
 
 
 def main():
-    img = Image.new("RGBA", (W, H), (255, 255, 255, 255))
+    img = Image.new("RGBA", (W, H_ALL), (255, 255, 255, 255))
     d = ImageDraw.Draw(img)
 
     # 床とグリッド (0.25m 薄線 / 0.5m 線 / 1m 太線)
@@ -143,6 +160,8 @@ def main():
     d = ImageDraw.Draw(img)
     used = []   # 足元に書いた文字の矩形 (机の上の物どうしで重ならないように、重なったら下へずらす)
     for fur in FURNITURE.values():
+        if on_desk2(fur):   # デスク2の上の物は下の拡大図に名前を書く
+            continue
         x0, y0, x1, y1 = footprint(fur)
         (ax, ay), (bx, by) = P(x0, y1), P(x1, y0)
         cx, cy = (ax + bx) / 2, (ay + by) / 2
@@ -207,9 +226,60 @@ def main():
     d.text((12, H - 28), "座標 (X, Y) = (西壁からの距離, 南壁からの距離)  Z = 床からの高さ。 東西南北は間取り図の向き (上=北) に合わせた呼び方で、実際の方位とは無関係。",
            font=font(15), fill=C_SUB, anchor="lm")
 
+    img = desk_inset(img)
     out = os.path.join(ROOT, "renders", "guide_plan.png")
     img.convert("RGB").save(out)
     print("WROTE:", out, img.size)
+
+
+def desk_inset(img):
+    """デスク2の天板の上の拡大図 (図の下)。足元の四角・正面の向きの矢印・名前と、0.1m ごとの目盛り"""
+    d = ImageDraw.Draw(img)
+    desk = FURNITURE["desk2"]
+    dx0, dy0, dx1, dy1 = footprint(desk)
+    d.text((ZL, ZT - 36), f"デスク2の上 (拡大 x{ZOOM})   天板 X {dx0:.2f}〜{dx1:.2f} / Y {dy0:.2f}〜{dy1:.2f}、高さ {desk['h']:.2f}m"
+           "   上 = 北 (座る側)", font=font(18), fill=C_TEXT, anchor="lm")
+    d.rectangle([Z(ZX0, 0), Z(ZX1, ZY0)], fill=C_WALL)                       # 南壁
+    d.text((Z((ZX0 + ZX1) / 2, 0)[0], Z(0, ZY0 / 2)[1]), "南壁  Y = 0", font=font(13), fill=(255, 255, 255), anchor="mm")
+    d.rectangle([Z(ZX0, ZY1), Z(ZX1, 0)], fill=C_FLOOR)
+    d.rectangle([Z(dx0, dy1), Z(dx1, dy0)], fill=(214, 190, 160), outline=(150, 112, 80), width=2)   # 天板
+    for i in range(round(dx0 * 20), round(dx1 * 20) + 1):                    # 0.05m の線 / 0.1m の目盛り
+        x = i / 20
+        d.line([Z(x, dy0), Z(x, dy1)], fill=(196, 170, 138) if i % 2 else (176, 146, 110), width=1)
+        if i % 2 == 0:
+            d.text((Z(x, 0)[0], Z(0, ZY0)[1] + 16), f"{x:.1f}", font=font(14), fill=C_TEXT, anchor="mm")
+    for j in range(round(dy0 * 20), round(dy1 * 20) + 1):
+        y = j / 20
+        d.line([Z(dx0, y), Z(dx1, y)], fill=(196, 170, 138) if j % 2 else (176, 146, 110), width=1)
+        if j % 2 == 0:
+            d.text((Z(ZX0, y)[0] - 8, Z(0, y)[1]), f"{y:.1f}", font=font(14), fill=C_TEXT, anchor="rm")
+    d.text((Z(ZX1, 0)[0] + 8, Z(0, ZY0)[1] + 16), "X [m]", font=font(14), fill=C_SUB, anchor="lm")
+    d.text((Z(ZX0, ZY1)[0] - 8, Z(0, ZY1)[1] - 2), "Y [m]", font=font(14), fill=C_SUB, anchor="rm")
+    items = sorted((f for f in FURNITURE.values() if on_desk2(f)), key=lambda f: -f["w"] * f["d"])   # 大きい物から (小物を上に重ねる)
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    for fur in items:
+        od.polygon([Z(*c) for c in corners(fur)], fill=(*fur["color"], 175), outline=(*(round(c * 0.55) for c in fur["color"]), 255), width=2)
+    img = Image.alpha_composite(img, overlay)
+    d = ImageDraw.Draw(img)
+    used = []
+    for fur in items:
+        cx, cy = Z(fur["x"], fur["y"])
+        ang = math.radians(rotation_deg(fur))
+        fx, fy = math.sin(ang), math.cos(ang)
+        n = min(fur["w"], fur["d"]) * ZS * 0.3
+        arrow(d, (cx, cy), (cx + fx * n, cy + fy * n), color=(30, 30, 34), width=2)
+        r, g, b = fur["color"]
+        ink = (30, 30, 34) if 0.299 * r + 0.587 * g + 0.114 * b > 150 else (255, 255, 255)   # 明るい色の物には黒い文字
+        tw = font(13).getlength(fur["label"])
+        ty = cy - 10
+        while any(abs(ty - uy) < 15 and abs(cx - ux) < (tw + uw) / 2 for ux, uy, uw in used):
+            ty += 16
+        used.append((cx, ty, tw))
+        box = d.textbbox((cx, ty), fur["label"], font=font(13), anchor="mm")
+        d.rectangle([box[0] - 2, box[1] - 1, box[2] + 2, box[3] + 1], fill=(*fur["color"], 255) if ink != (30, 30, 34) else (250, 248, 244))
+        d.text((cx, ty), fur["label"], font=font(13), fill=ink, anchor="mm")
+    return img
 
 
 if __name__ == "__main__":

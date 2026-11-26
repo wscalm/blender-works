@@ -21,6 +21,8 @@ LEG = "#BF9A6B"        # 脚の木。床の木 (#96744F〜#A78862) をもう少�
 LEG_Z = 0.15           # 脚の高さ = 本体の底の高さ
 SEAT_Z = 0.27          # 座面クッションの下面
 SEAT_TOP = SOFA_SEAT   # 座面の高さ (サイドテーブルの高さと揃える)
+BACK_DROP = 0.14       # 背板の上端は背クッションの上端 (layout の h) より 14cm 低い
+BACK_LEAN = 0.19       # 背クッションのもたれ: 高さ 1m あたり後ろへずれる量 (約 11°)
 SIDES = 16             # 脚の断面の角数 (なめらかに表示する)
 FABRIC = dict(texture="sofa_fabric_1k.jpg", texture_size=0.27)   # tools/make_textures.py (平均の色 = CUSHION)
 FABRIC_MEAN = (133, 145, 160)
@@ -37,11 +39,11 @@ def _leg(cx, cy, splay_x, splay_y, r_top=0.032, r_bottom=0.022):
     return verts, faces   # 上下の面は本体と床で隠れるので作らない
 
 
-def _pillow(name, mat, x, yaw, roll, seed, root, stripes=False):
-    """背もたれに立て掛けたクッション (42 x 42cm。縁が薄く真ん中が厚い、角のとがった形。props.pillow_object)。x = 置く席の中心 (ローカル X)。
+def _pillow(name, mat, x, y, yaw, roll, seed, root, stripes=False):
+    """背もたれに立て掛けたクッション (42 x 42cm。縁が薄く真ん中が厚い、角のとがった形。props.pillow_object)。x, y = 置く席の中心 (ローカル)。
     下の縁は座面に少し沈み、上の方が背クッションに寄りかかる (後ろへ 14°)。背クッションに当たる裏側は少しつぶれる。
     縞はクッションの横向き (布の画像 0.5m に縞 10 本)"""
-    m = (Matrix.Translation((x, 0.085, SEAT_TOP + 0.20)) @ Matrix.Rotation(math.radians(yaw), 4, 'Z')
+    m = (Matrix.Translation((x, y, SEAT_TOP + 0.20)) @ Matrix.Rotation(math.radians(yaw), 4, 'Z')
          @ Matrix.Rotation(math.radians(-14), 4, 'X') @ Matrix.Rotation(math.radians(roll), 4, 'Y')
          @ Matrix.Rotation(math.radians(90), 4, 'X'))   # クッションの面 (上から見た形) を立てる: 表 = -Y、縦 = Z
     return pillow_object(name, 0.42, 0.42, 0.13, [mat], m, parent=root, flat_bottom=0.35, wrinkle=0.004, seed=seed,
@@ -62,10 +64,11 @@ def build_sofa():
     iw = hx - arm               # 肘掛けの内側 (座面の半幅)
     arm_top = BED_TOP           # 肘掛けの上面 = ベッドの上面 = スツールの高さ。飾りなしの平らな箱 (上面はふくらませない)
     soft_boxes_object("sofa_body", [
-        (-hx, hx, -hy, hy, LEG_Z, SEAT_Z, body, 0.012, (0.0, 0.0, 0.0)),                     # 土台
+        # 土台は肘掛けの間だけ (肘掛けの下まで通すと外の面が肘掛けの面と重なり、ビューアの RETRO の頂点の揺れで中の暗い面が筋になって透ける)
+        (-iw, iw, -hy, hy, LEG_Z, SEAT_Z, body, 0.012, (0.0, 0.0, 0.0)),
         (-hx, -iw, -hy, hy, LEG_Z, arm_top, body, 0.015, (0.002, 0.002, 0.0)),               # 肘掛け 左右
         (iw, hx, -hy, hy, LEG_Z, arm_top, body, 0.015, (0.002, 0.002, 0.0)),
-        (-iw, iw, hy - back_t, hy, LEG_Z, 0.64, body, 0.015, (0.0, 0.003, 0.0)),             # 背板
+        (-iw, iw, hy - back_t, hy, LEG_Z, e["h"] - BACK_DROP, body, 0.015, (0.0, 0.003, 0.0)),   # 背板
     ], parent=root, cuts=10)
 
     gap = 0.005                 # 左右のクッションの継ぎ目
@@ -76,8 +79,8 @@ def build_sofa():
         # 座面: 手前へ 2cm はみ出す
         items.append((x0, x1, -hy - 0.02, seat_back, SEAT_Z, SEAT_TOP - puff, cushion, 0.02, (0.002, 0.003, puff)))
         # 背: 厚み 0.17 のまま、上へ行くほど後ろへ傾く (背板に寄りかかる)。下端は座面に少し沈める
-        t, lean, top = 0.17, 0.075, e["h"]
-        items.append((x0, x1, seat_back - t, seat_back, SEAT_TOP - 0.03, top, cushion, 0.025, (0.002, 0.008, 0.0), lean))
+        t, z0, top = 0.17, SEAT_TOP - 0.03, e["h"]
+        items.append((x0, x1, seat_back - t, seat_back, z0, top, cushion, 0.025, (0.002, 0.008, 0.0), BACK_LEAN * (top - z0)))
     soft_boxes_object("sofa_cushions", items, parent=root, cuts=12)
 
     # 丸い脚 4 本。四隅から少し内側に付け、床へ向かって外へ少し開く
@@ -91,9 +94,10 @@ def build_sofa():
     for poly in legs.data.polygons:
         poly.use_smooth = True
 
-    # クッション: 北の席 (ローカル +X) に白地にグレーの細いボーダー、南の席にライトグレー
+    # クッション: 北の席 (ローカル +X) に白地にグレーの細いボーダー、南の席にライトグレー。背クッションの前の面から 4.5cm 前に立て掛ける
     stripe = make_material("sofa_pillow_stripe", "#FFFFFF", roughness=1.0, specular=0.3, texture="stripe_fabric.jpg", texture_size=1.0)
     gray = fabric_material("sofa_pillow_gray", "cotton", (158, 161, 164))
-    _pillow("sofa_pillow_stripe", stripe, iw / 2 + 0.01, -6, 4, 31, root, stripes=True)
-    _pillow("sofa_pillow_gray", gray, -iw / 2 - 0.02, 8, -3, 32, root)
+    py = seat_back - 0.215
+    _pillow("sofa_pillow_stripe", stripe, iw / 2 + 0.01, py, -6, 4, 31, root, stripes=True)
+    _pillow("sofa_pillow_gray", gray, -iw / 2 - 0.02, py, 8, -3, 32, root)
     return root

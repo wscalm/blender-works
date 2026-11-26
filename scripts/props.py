@@ -160,6 +160,52 @@ def lathe_object(name, profile, mats, parent=None, segments=32, location=(0, 0, 
     return obj
 
 
+def rounded_rect(hw, hd, r, corner_segments=6):
+    """角の丸い長方形 (半分の幅 hw・半分の奥行 hd・角の半径 r) の輪郭の点 [(x, y), ...] (反時計回り。点の数は r によらず同じ)"""
+    r = max(1e-5, min(r, hw - 1e-5, hd - 1e-5))
+    pts = []
+    for cx, cy, a0 in ((hw - r, hd - r, 0), (-hw + r, hd - r, 90), (-hw + r, -hd + r, 180), (hw - r, -hd + r, 270)):
+        for k in range(corner_segments + 1):
+            a = math.radians(a0 + 90 * k / corner_segments)
+            pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+    return pts
+
+
+def rounded_rect_lathe(name, w, d, radius, profile, mats, parent=None, corner_segments=6, matrix=None, smooth=True):
+    """角の丸い長方形の板 (コースター・Echo の前の板など): lathe_object の円の代わりに、角の丸い長方形を重ねた物。
+    profile = [(内側へ寄せる量 inset, 高さ z, 材質の番号), ...] (下の中心 (inset=None) → 外側を上へ → 上の中心 (None) の順)。
+    各段の輪郭は 幅 w - 2 inset・奥行 d - 2 inset・角の半径 radius - inset。原点 = 底の中心、matrix で置く"""
+    verts, faces, face_mats, rings = [], [], [], []
+    for inset, z, _ in profile:
+        if inset is None:
+            rings.append(-(len(verts) + 1))
+            verts.append((0.0, 0.0, z))
+            continue
+        rings.append(len(verts))
+        ring = rounded_rect(w / 2 - inset, d / 2 - inset, radius - inset, corner_segments)
+        verts += [(x, y, z) for x, y in ring]
+    n = 4 * (corner_segments + 1)
+    for k in range(len(profile) - 1):
+        a, b, mi = rings[k], rings[k + 1], profile[k][2]
+        for i in range(n):
+            j = (i + 1) % n
+            if a < 0:
+                faces.append((-a - 1, b + j, b + i))
+            elif b < 0:
+                faces.append((a + i, a + j, -b - 1))
+            else:
+                faces.append((a + i, a + j, b + j, b + i))
+            face_mats.append(mi)
+    if matrix is not None:
+        verts = [tuple(matrix @ Vector(v)) for v in verts]
+    obj = mesh_object(name, verts, faces, mats, face_mats, parent=parent)
+    for p in obj.data.polygons:
+        p.use_smooth = smooth
+    if smooth:
+        obj.data.set_sharp_from_angle(angle=math.radians(50))   # 上の面と側面の境目などは角のまま
+    return obj
+
+
 def tube_mesh(path, radius, sides=8, closed=False):
     """折れ線 path [(x, y, z), ...] に沿った細い管 (針金・フック・カーテンのリング・コンセントの線)。(verts, faces) を返す。端は閉じない"""
     pts = [Vector(p) for p in path]

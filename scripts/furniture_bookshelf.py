@@ -9,10 +9,10 @@
   2段目 (左)   上: 漫画・単行本 / 下: 文庫
   3段目 (右)   上: 白いかご (中に布) + 籐のかご / 下: えんじ色のケース・黒い袋・平積みの本
   最下段 (左)  上: 本 / 下: 灰色と白の収納ケース
-天板の上に書類の束、最下段の扉 (右) の前の床に、月夜の絵の額を立て掛ける。
+天板の上に書類の束、最下段の扉 (右) の受けに、月夜の絵の額 (横長) を立てる (2026-10-27 ユーザー指定「きちんとラック部分に乗せて」)。
 位置・大きさは layout.py。ローカル座標: 原点 = 足元の中心 / 正面 = -Y / 正面から見て右 = +X
 構成: Empty `bookshelf` の下に、枠 `bookshelf_body` (側板・天板・底板・仕切り・棚板・背板)、扉 `bookshelf_doors` (受け付き)、
-Empty `bookshelf_items` (本・かご・飾り・書類・立て掛けた絵)
+Empty `bookshelf_items` (本・かご・飾り・書類・受けに立てた絵)
 """
 import math
 import os
@@ -29,6 +29,7 @@ GAP = 0.003      # 扉のまわりのすき間
 ROWS = 4
 DOORS = {(0, "left"), (1, "right"), (2, "left"), (3, "right")}   # 扉の付くマス (段: 0 = 最上段, 列: 正面から見て)
 LIP_D, LIP_H = 0.05, 0.055   # 扉の下の受けの奥行と高さ (写真)
+MOON_W, MOON_H = 0.58, 0.50  # 最下段 (右) の扉の受けに立てた月夜の絵の額の外寸 (写真)
 # 扉の無いマスの中の棚板: マスの内法の下端から棚板の上面までの高さ
 INNER = {(0, "right"): 0.27, (1, "left"): 0.205, (2, "right"): 0.25, (3, "left"): 0.23}
 
@@ -174,8 +175,12 @@ def _fill(items, cols, cell_top, cell, hy, yb):
                                           make_material("bookshelf_kraft", "#B98F5E", roughness=0.8))], parent=items)
     image_quad("bookshelf_paper_sheet", 0.2, 0.27, paper, place(0.33, -hy - 0.0015, lip_z(1)), parent=items)
 
-    # 最下段 (右) の扉の前の床に立て掛けた月夜の絵 (写真)。額の背の下の縁は本棚から 10cm 前、上の縁が扉にもたれる
-    w, hgt, setback = 0.53, 0.65, 0.10
-    lean = math.degrees(math.asin((setback - 0.003) / hgt))
+    # 最下段 (右) の扉の受けに立てた月夜の絵 (写真。2026-10-27 ユーザー指定「きちんとラック部分に乗せて」)。横長の額で、受けより幅が広く、
+    # 右の端は本棚の右の側板の外面に揃い、左は左の列へ少しかかる。額の前の下の縁を受けの前板の内側に当て、上の縁の背が扉 (と上の棚板の前の縁) にもたれる。
+    # 額の上の縁は最下段の上の棚板より 2cm ほど上 (写真)。絵の画像の縦横比は tools/make_prints.py の make_moon と合わせる
+    w, hgt, depth = MOON_W, MOON_H, 0.02
+    right = cols["right"][1] + T                          # 右の側板の外面
+    y0 = lip_in + 0.001                                   # 額の前の下の縁
+    lean = math.degrees(math.asin((-hy - 0.001 - (y0 + depth)) / hgt))
     framed_picture("bookshelf_moon", w, hgt, 0.022, 0.045, "print_moon.jpg", "#D9D9D6",
-                   place(0.2, -hy - setback, 0.0, pitch=lean), parent=items)
+                   place(right - w / 2, y0 + depth, lip_z(3), pitch=lean), parent=items, depth=depth)

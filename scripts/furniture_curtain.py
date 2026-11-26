@@ -1,11 +1,14 @@
 """カーテン (くすんだグレージュっぽい茶色の無地。ユーザー指定)。東壁の掃き出し窓に掛け、2枚とも閉めた状態 (ユーザー指定)。
-レールはエアコンの下端の少し下 (layout.CURTAIN_ROD_Z。ユーザー指定)。銀色の丸い棒に、リングとフックで吊るす (写真 reference/IMG_1100)。
+レールはエアコンの下端の少し下 (layout.CURTAIN_ROD_Z。ユーザー指定)。金属 (アルミ) の角いレールで、中を走るランナーに布のフックを引っ掛ける
+(2026-10-27 ユーザー指定「リングを通して吊るすものではなく、フックをひっかけるタイプ。カーテンとの距離はかなり近く、低い視点から見るとレールは見えない」)。
+フックは A フック (布の上端がレールより上に出て、レールの前を隠す) にして、布の芯地の裏をレールの前の面の数 mm 前に吊るす。
+座った目の高さからはレールは布に隠れて見えない。
 布の上端は芯地の入った二つ山ヒダ (フックの所でつまんだ小さな山が2つ)。その下はフックの所が手前に出た縦のヒダになり、
 裾へ行くほど深く、少し不揃いになる。布は織り目と糸のむらのある画像 (tools/make_textures.py の curtain_fabric)。
 
 ローカル座標: 原点 = 床の上の足元の中心 / 正面 = -Y / X = 正面から見て右 (= 南) / 背面 (壁側) = +Y
-構成: Empty `curtain` の下に、布 `curtain_cloth` (2枚を1つのメッシュに)・銀色のレール `curtain_rod` `curtain_rod_brackets`・
-リングとフック `curtain_rings` `curtain_hooks` (細いのでライトマップはレールの光を借りる)
+構成: Empty `curtain` の下に、布 `curtain_cloth` (2枚を1つのメッシュに)・レール `curtain_rail` (下に溝・両端にキャップ)・壁の金具 `curtain_rail_brackets`・
+ランナー `curtain_runners` とフック `curtain_hooks` (小さいのでライトマップはレールの光を借りる)
 """
 import math
 import os
@@ -21,8 +24,10 @@ C = FURNITURE["curtain"]
 WIDTH = C["w"]          # レールの幅。窓 (1.8m) の両側に 10cm ずつ余らせる。エアコン (Y 2.65〜) には触れない
 DEPTH = C["d"]          # 壁からの出
 ROD_Z = CURTAIN_ROD_Z   # レールの中心の高さ
-RING_R, WIRE = 0.019, 0.0025       # リングの半径 / 針金の太さ
-Z_TOP = ROD_Z - RING_R - 0.016     # 布の上端 (リングの下にフック 1.6cm)
+RAIL_W, RAIL_H = 0.020, 0.014      # レールの断面 (奥行・高さ)
+RAIL_Y = 0.048                     # 壁からレールの中心まで (レールの前の面と布の芯地の裏は 3〜6mm)
+RUNNER_Z = ROD_Z - RAIL_H / 2 - 0.005   # ランナーの下の輪 (フックを掛ける所) の高さ
+Z_TOP = ROD_Z + 0.02               # 布の上端 (A フック: レールの上端より 1.3cm 上に出て、レールの前を隠す)
 Z_BOTTOM = 0.015        # 裾 (床から 1.5cm)
 HEAD = 0.075            # 上の芯地 (二つ山ヒダ) の高さ
 FOLD = 0.045            # 芯地のすぐ下のヒダの深さ (山と谷の差)
@@ -36,7 +41,7 @@ PANELS = [(-WIDTH / 2, 0.004, 8, 11, +1, False), (-0.004, WIDTH / 2, 8, 23, -1, 
 
 
 def _panel(x0, x1, pleats, seed, lead, behind):
-    """布1枚: フックの所 (山) が手前に出た縦のヒダ。(verts, faces, U = 布に沿った長さ, フックの x の列)"""
+    """布1枚: フックの所 (山) が手前に出た縦のヒダ。(verts, faces, U = 布に沿った長さ, フックの (x, 芯地の y) の列)"""
     rng = random.Random(seed)
     amp = [rng.uniform(0.75, 1.25) for _ in range(pleats + 1)]       # 山ごとの深さの違い
     drift = [rng.uniform(-0.018, 0.018) for _ in range(pleats + 1)]  # 裾での山の横のずれ
@@ -70,13 +75,20 @@ def _panel(x0, x1, pleats, seed, lead, behind):
     n = len(ss)
     faces = [(r * n + i, r * n + i + 1, (r + 1) * n + i + 1, (r + 1) * n + i)
              for r in range(len(zs) - 1) for i in range(n - 1)]
-    return verts, faces, arc, [x0 + gap * k for k in range(pleats + 1)]
+    hooks = []   # フック (x, その所の芯地の y)。山 (つまんだ所) ごと。布の両端のフックは端から 1.5cm 内側 (横から見えないように)
+    for k in range(pleats + 1):
+        s = k + (0.015 / gap if k == 0 else -0.015 / gap if k == pleats else 0.0)
+        hooks.append((x0 + gap * s, -(0.004 + 0.016 * math.exp(-((s - round(s)) / 0.09) ** 2)) + (0.003 if behind else 0.0)))
+    return verts, faces, arc, hooks
 
 
 def build_curtain():
     cloth_mat = make_material("curtain_cloth", "#FFFFFF", roughness=1.0, specular=0.12, double_sided=True,   # ヒダの間から裏が見える。ツヤはほぼ無し
                               texture="curtain_fabric_1k.jpg", texture_size=0.53)   # 無地 (織り目と糸のむらだけ)
-    rod_mat = make_material("curtain_rod", "#C8CACC", roughness=0.35, metallic=0.6)
+    rail_mat = make_material("curtain_rail", "#C8CACC", roughness=0.35, metallic=0.6)   # アルミ
+    cap_mat = make_material("curtain_rail_cap", "#D6D6D3", roughness=0.5)                # 両端のキャップ (樹脂)
+    slot_mat = make_material("curtain_rail_slot", "#2B2B2D", roughness=0.7)              # 下の溝 (中の暗がり)
+    runner_mat = make_material("curtain_runner", "#ECECE8", roughness=0.5)               # ランナー (白い樹脂)
 
     root = add_empty("curtain", (C["x"], C["y"], C["z0"]), FACING_DEG[C["facing"]])
 
@@ -97,19 +109,29 @@ def build_curtain():
     for poly in cloth.data.polygons:
         poly.use_smooth = True
 
-    # レール: 銀色の丸い棒 (両端に玉) + 壁への留め具2つ (リングの間)。リングは棒を囲み、フックで布の芯地の裏へ
+    # レール: アルミの角いレール (下の面の中央に溝。両端に樹脂のキャップ) を、壁の金具3つで吊る。
+    # 中のランナーの下の輪に、布の芯地の裏に差したフックを引っ掛ける。フックは布のつまんだ山 (hooks) の裏に差す
     wall = DEPTH / 2                       # 壁面のローカル y
-    ry = wall - 0.08                       # 棒の中心 (壁から 8cm)
-    e = WIDTH / 2
-    lathe_object("curtain_rod", [(0, -e - 0.055, 0), (0.012, -e - 0.05, 0), (0.02, -e - 0.04, 0), (0.02, -e - 0.02, 0), (0.012, -e - 0.015, 0),
-                                 (0.012, e + 0.015, 0), (0.02, e + 0.02, 0), (0.02, e + 0.04, 0), (0.012, e + 0.05, 0), (0, e + 0.055, 0)],
-                 [rod_mat], parent=root, segments=16,
-                 matrix=Matrix.Translation((0, ry, ROD_Z)) @ Matrix.Rotation(math.radians(90), 4, 'Y'))
-    bx = 0.8125                            # 留め具 (フックとフックの間)
-    boxes_object("curtain_rod_brackets", [(x - 0.01, x + 0.01, ry, wall, ROD_Z - 0.008, ROD_Z + 0.008, rod_mat) for x in (-bx, bx)],
-                 parent=root, bevel=0.002)
-    tubes_object("curtain_rings", [circle(x, ry, ROD_Z, RING_R, n=16, axis="x") for x in hooks], WIRE, rod_mat,
-                 parent=root, sides=5, closed=True, light_from="curtain_rod")
-    tubes_object("curtain_hooks", [[(x, ry, ROD_Z - RING_R), (x, ry + 0.006, Z_TOP + 0.006), (x, -0.004, Z_TOP - 0.02)] for x in hooks],
-                 0.0015, rod_mat, parent=root, sides=5, light_from="curtain_rod")
+    ry = wall - RAIL_Y                     # レールの中心
+    e = WIDTH / 2                          # レールの端 = 布の端 (端のフックはレールの端のランナー。キャップだけ外に出る)
+    z0, z1 = ROD_Z - RAIL_H / 2, ROD_Z + RAIL_H / 2
+    boxes_object("curtain_rail", [
+        (-e, e, ry - RAIL_W / 2, ry + RAIL_W / 2, z0, z1, rail_mat),
+        (-e + 0.004, e - 0.004, ry - 0.003, ry + 0.003, z0 - 0.0006, z0 + 0.001, slot_mat, 0.0),
+        (-e - 0.007, -e, ry - RAIL_W / 2 - 0.001, ry + RAIL_W / 2 + 0.001, z0 - 0.001, z1 + 0.001, cap_mat),
+        (e, e + 0.007, ry - RAIL_W / 2 - 0.001, ry + RAIL_W / 2 + 0.001, z0 - 0.001, z1 + 0.001, cap_mat),
+    ], parent=root, bevel=0.0015)
+    brackets = []
+    for x in (-0.85, 0.0, 0.85):           # 壁の板 + レールの上に掛かる腕
+        brackets += [(x - 0.013, x + 0.013, wall - 0.004, wall, z0 - 0.006, z1 + 0.012, rail_mat),
+                     (x - 0.009, x + 0.009, ry - RAIL_W / 2 + 0.002, wall - 0.004, z1, z1 + 0.006, rail_mat)]
+    boxes_object("curtain_rail_brackets", brackets, parent=root, bevel=0.0015)
+    runners = boxes_object("curtain_runners", [(x - 0.005, x + 0.005, ry - 0.005, ry + 0.005, RUNNER_Z - 0.003, ROD_Z, runner_mat)
+                                               for x, _ in hooks], parent=root, bevel=0.0015)
+    runners["lightmap_proxy"] = "curtain_rail"
+    # フック: ランナーの輪から下へ → 前へ出て、芯地の裏 (布の 4mm 奥) を下へ
+    paths = []
+    for x, back in hooks:
+        paths.append([(x, ry, RUNNER_Z + 0.002), (x, ry, RUNNER_Z - 0.006), (x, back + 0.004, RUNNER_Z - 0.016), (x, back + 0.004, RUNNER_Z - 0.045)])
+    tubes_object("curtain_hooks", paths, 0.0015, rail_mat, parent=root, sides=5, light_from="curtain_rail")
     return root

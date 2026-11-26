@@ -1,8 +1,7 @@
-"""印刷物・画面の画像をコードで描いて textures/ に保存する (python3 tools/make_prints.py)。
+"""印刷物の画像をコードで描いて textures/ に保存する (python3 tools/make_prints.py)。
 
 写真 (reference/IMG_1099・IMG_1100) に写っている物の「雰囲気」を、実物の絵柄や文字を写さずに描く:
   books_atlas.jpg      本の背・表紙・天・小口 (64 冊分の柄を1枚に並べる。scripts/props.py の BOOK_ATLAS と並びを合わせる)
-  screen_main.png      メインモニターの画面 (白い背景の管理画面風。グラフと文字の代わりの灰色の帯)
   clock_face.jpg       壁掛け時計の文字盤 (数字・分の点・温度計と湿度計の小さな目盛り)
   print_sunset.jpg     突っ張り棚の上の絵 (夕焼けの海と椰子の木)
   print_moon.jpg       本棚に立て掛けた絵 (月夜の海とイルカ)
@@ -208,63 +207,6 @@ def make_books_atlas():
     save(img, "books_atlas.jpg", quality=92)
 
 
-# ---------------------------------------------------------------- 画面
-def make_screen():
-    """白い管理画面 (写真では白い画面に棒グラフ・円グラフ・折れ線)。上にオレンジの帯、左に灰色の項目の列、下にタスクバー"""
-    W, H = 1280, 720
-    img = Image.new("RGB", (W, H), (255, 255, 255))
-    d = ImageDraw.Draw(img)
-    rng = random.Random(7)
-    gray, light, line = (120, 124, 130), (226, 229, 233), (236, 238, 241)
-    d.rectangle([0, 0, W, 34], fill=(245, 166, 35))                          # 上の帯
-    d.rounded_rectangle([14, 10, 120, 24], 4, fill=(255, 235, 200))
-    for k in range(4):
-        d.rounded_rectangle([W - 60 - k * 46, 11, W - 28 - k * 46, 23], 4, fill=(255, 214, 150))
-    d.rectangle([0, 34, 190, H - 30], fill=(247, 248, 250))                   # 左の項目
-    d.line([190, 34, 190, H - 30], fill=light, width=2)
-    for k in range(14):
-        y = 60 + k * 34
-        if k == 2:
-            d.rectangle([0, y - 10, 190, y + 16], fill=(255, 238, 214))
-        d.rounded_rectangle([22, y, 22 + rng.randint(70, 140), y + 8], 4, fill=gray if k == 2 else (170, 174, 180))
-    d.rounded_rectangle([220, 56, 480, 72], 6, fill=(70, 74, 80))             # 見出し
-    d.rounded_rectangle([220, 82, 380, 90], 4, fill=(180, 184, 190))
-    for k in range(4):                                                        # 数字のカード
-        x = 220 + k * 262
-        d.rounded_rectangle([x, 110, x + 246, 190], 8, outline=light, width=2, fill=(255, 255, 255))
-        d.rounded_rectangle([x + 16, 126, x + 96, 134], 4, fill=(180, 184, 190))
-        d.rounded_rectangle([x + 16, 148, x + 16 + rng.randint(80, 150), 172], 6, fill=(60, 64, 70))
-    # 棒グラフ
-    d.rounded_rectangle([220, 210, 860, 450], 8, outline=light, width=2)
-    d.rounded_rectangle([238, 226, 400, 236], 4, fill=(150, 154, 160))
-    colors = [(76, 175, 80), (66, 133, 244), (156, 39, 176), (255, 193, 7), (120, 124, 130)]
-    for k in range(18):
-        x = 270 + k * 32
-        hgt = int(30 + 170 * abs(math.sin(k * 0.55 + 0.8)) * (0.4 + 0.6 * math.exp(-((k - 8) / 5) ** 2)))
-        d.rectangle([x, 430 - hgt, x + 16, 430], fill=colors[k % len(colors)])
-    d.line([250, 431, 840, 431], fill=light, width=2)
-    # 円グラフ (ドーナツ)
-    d.rounded_rectangle([880, 210, 1250, 450], 8, outline=light, width=2)
-    box = [960, 240, 1170, 450 - 30 + 10]
-    start = -90
-    for frac, c in ((0.38, (66, 133, 244)), (0.24, (76, 175, 80)), (0.2, (255, 167, 38)), (0.18, (171, 71, 188))):
-        d.pieslice(box, start, start + frac * 360, fill=c)
-        start += frac * 360
-    cxy = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
-    d.ellipse([cxy[0] - 62, cxy[1] - 62, cxy[0] + 62, cxy[1] + 62], fill=(255, 255, 255))
-    # 折れ線
-    d.rounded_rectangle([220, 470, 1250, 680], 8, outline=light, width=2)
-    pts = [(250 + k * 25, 600 - 60 * math.exp(-k / 6) - 8 * math.sin(k * 0.9) + rng.uniform(-3, 3)) for k in range(40)]
-    for y in (520, 560, 600, 640):
-        d.line([240, y, 1230, y], fill=line, width=1)
-    d.line(pts, fill=(110, 116, 124), width=3)
-    d.rectangle([0, H - 30, W, H], fill=(232, 236, 241))                      # タスクバー
-    for k in range(7):
-        x = W / 2 - 120 + k * 36
-        d.rounded_rectangle([x, H - 23, x + 18, H - 7], 3, fill=[(0, 120, 215), (255, 185, 0), (90, 90, 96)][k % 3])
-    save(img, "screen_main.png")
-
-
 # ---------------------------------------------------------------- 時計
 def make_clock_face():
     """文字盤 (写真: 白地に黒い数字 1〜12、分の点、下に温度計と湿度計の小さな目盛り、その下に横線)。画像の外接円 = 文字盤の縁"""
@@ -362,13 +304,14 @@ def make_sunset():
 
 
 def make_moon():
-    """月夜の海 (写真: 濃い青の夜空に大きな月、跳ねるイルカの影、波のしぶき)"""
-    W, H = 800, 1000
+    """月夜の海 (写真: 濃い青の夜空に大きな月、跳ねるイルカの影、波のしぶき)。
+    横長の額 (scripts/furniture_bookshelf.py の MOON_W x MOON_H から額縁と台紙を除いた 0.446 x 0.366m) と同じ縦横比"""
+    W, H = 976, 800
     rng = np.random.default_rng(21)
     arr = _gradient((W, H), [(0, (6, 14, 50)), (0.45, (20, 50, 120)), (0.7, (14, 40, 100)), (1, (4, 10, 34))])
     img = Image.fromarray(arr.astype(np.uint8))
     d = ImageDraw.Draw(img, "RGBA")
-    mx, my, mr = W * 0.5, H * 0.38, W * 0.27
+    mx, my, mr = W * 0.5, H * 0.38, H * 0.27
     for k in range(10, 0, -1):   # 月のまわりの光
         r = mr * (1 + k * 0.08)
         d.ellipse([mx - r, my - r, mx + r, my + r], fill=(120, 160, 230, 10))
@@ -624,7 +567,7 @@ def make_tissue_box():
 
 
 # ---------------------------------------------------------------- ラグ
-RUG_W, RUG_D, RUG_CORNER = 1.40, 0.90, 0.08   # ラグの大きさと角の丸み (m)。scripts/layout.py (rug) と scripts/furniture_rug.py の CORNER_R
+RUG_W, RUG_D, RUG_CORNER = 1.40, 1.00, 0.08   # ラグの大きさと角の丸み (m)。scripts/layout.py (rug) と scripts/furniture_rug.py の CORNER_R
 
 
 def _dog(s, rng):
@@ -753,7 +696,6 @@ def make_rug():
 
 if __name__ == "__main__":
     make_books_atlas()
-    make_screen()
     make_clock_face()
     make_sunset()
     make_moon()
