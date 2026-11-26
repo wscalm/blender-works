@@ -420,6 +420,11 @@ async function loadRoom() {
       else if (map) map.anisotropy = renderer.capabilities.getMaxAnisotropy();   // 斜めから見る床の木目をぼかさない
       o.material = ps1Vertex(lightmap ? bakedMaterial(o.material, lightmap, info.lightmap_intensity, glossmap, info.glossmap_intensity)
         : o.material.clone());   // ホバーで色を変えるので、メッシュごとに持たせる
+      if (RETRO && RETRO_CFG.jitter && (o.geometry.index?.count === 6 || o.userData.decal || o.parent?.userData.decal)) {
+        // 面のすぐ前に貼った画像の板 (三角形2枚。モニターの画面・絵・印刷。キーの光る字のように板が多い物は extras の decal) は、
+        // 頂点を揺らすと奥の面と奥行きを取り合って欠けるので、少し手前に描く
+        Object.assign(o.material, { polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+      }
       o.userData.baseColor = o.material.color.clone();
     });
     ceiling = ['room_ceiling', 'room_ceiling_light'].map((n) => world.getObjectByName(n)).filter(Boolean);
@@ -440,10 +445,15 @@ async function loadRoom() {
 function bakedMaterial(src, lightmap, intensity, glossmap, glossIntensity) {
   if (src.transparent) {   // ガラス: 夜は外の暗さがほぼ素通しに見える。型板ガラス (すりガラス) は部屋の明かりを少し返す灰色
     if (src.name.includes('frosted')) return new THREE.MeshBasicMaterial({ color: 0x39414a, transparent: true, opacity: 0.85, depthWrite: false });
+    // 名前に clear の付く透明な樹脂 (綿棒のケース): 部屋の明かりを少し返す、明るい薄い膜
+    if (src.name.includes('clear')) return new THREE.MeshBasicMaterial({ color: 0xdde5ea, transparent: true, opacity: 0.1, depthWrite: false });
     return new THREE.MeshBasicMaterial({ color: 0x0e1726, transparent: true, opacity: 0.18, depthWrite: false });
   }
   if (src.emissive && src.emissive.getHex() !== 0) {   // 照明のカバー・表示ランプ・点いている画面: 自分で光る (明るさ > 1 は bloom でにじむ)
-    return new THREE.MeshBasicMaterial({ color: src.emissive.clone().multiplyScalar(src.emissiveIntensity), map: src.emissiveMap });
+    const glow = { color: src.emissive.clone().multiplyScalar(src.emissiveIntensity), map: src.emissiveMap };
+    // 名前に _glow の付く材質 (キーの光る字): 黒い地の画像を、下の面に足し算で重ねる (黒い所は透けて、字だけ光る)
+    if (src.name.includes('_glow')) Object.assign(glow, { transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    return new THREE.MeshBasicMaterial(glow);
   }
   // three.js の lightMap は 色 × テクスチャ × lightMap × lightMapIntensity / π。焼いた値は「照度/π を intensity で割った物」なので π を掛ける。
   // ツヤは emissiveMap (自分で光る分) として足す。ライトは RETRO のフラッシュだけなので、Lambert の陰影の計算は lightMap (+ フラッシュ) になる

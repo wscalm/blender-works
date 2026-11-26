@@ -19,6 +19,7 @@ from furniture_boxes import build_boxes
 from furniture_clock import build_clock
 from furniture_curtain import build_curtain
 from furniture_desk import build_desks
+from furniture_desk_items import build_desk_items
 from furniture_hanger_rail import build_hanger_rail
 from furniture_keyboard import build_keyboard_mouse
 from furniture_monitor import build_monitors
@@ -58,6 +59,7 @@ def build_scene():
     build_printer()
     build_monitors()
     build_keyboard_mouse()
+    build_desk_items()
     build_clock()
     # (家具は今後ここに追加していく)
     add_box_uvs([o for o in bpy.context.scene.objects if o.type == 'MESH'])   # テクスチャ (木目) 用の UV

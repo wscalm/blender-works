@@ -3,6 +3,7 @@
 **Windows 側の Python** で動かす (WSL からは Windows の 127.0.0.1 の DevTools に届かないため)。標準ライブラリだけで書いてある。
     python cdp_shot.py <port> <url> <out.png> <幅> <高さ>
 ページの読み込みが終わる (body[data-ready]、または "load failed" が出る) まで実時間で待ってから撮り、最後に Edge を閉じる。
+ビューア以外のページ (モニターの画面に映すウェブページ) は document の読み込み完了だけを待つ。
 (Edge の --screenshot + --virtual-time-budget は、glb に埋め込んだテクスチャの読み込みを待たずに撮ってしまう)
 """
 import base64
@@ -112,10 +113,14 @@ def main():
         page.call("Page.navigate", url=url)
         end = time.time() + LOAD_TIMEOUT
         state = None
+        viewer = "/viewer/" in url
         while time.time() < end:
             time.sleep(0.5)
-            state = page.eval("document.readyState === 'complete' && (document.body.dataset.ready ? 'ready'"
-                              " : /load failed/.test(document.getElementById('status')?.textContent) ? 'failed' : false)")
+            if not viewer:
+                state = page.eval("document.readyState === 'complete' && 'ready'")
+            else:
+                state = page.eval("document.readyState === 'complete' && (document.body.dataset.ready ? 'ready'"
+                                  " : /load failed/.test(document.getElementById('status')?.textContent) ? 'failed' : false)")
             if state:
                 break
         if state != "ready":

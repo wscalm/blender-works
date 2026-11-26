@@ -5,6 +5,7 @@
 #   (swiftshader は斜めから見た大きな面を真っ黒に描くことがある。ユーザーのブラウザと同じ GPU 描画で確かめる)
 #   クエリ: look=north|east|south|west  pos=X,Y[,高さ] (部屋の座標 m)  at=X,Y,Z (その点を向く)  pitch=度  hfov=度  mode=orbit  probe=ノード名  debug
 #   ?debug を付けたときは、画面左上の表示 (probe の結果など) も端末に出す
+#   "https://..." を渡すと、そのページを撮る (モニターの画面に映すウェブページ。読み込み完了だけ待つ)
 # Edge を DevTools Protocol (tools/cdp_shot.py を Windows 側の Python で実行) で操作し、glb の読み込みが終わるまで待ってから撮る。
 # URL の最後に &_=時刻 を付ける (同じクエリだと、書き換える前の index.html をキャッシュから出すことがあった)。
 set -euo pipefail
@@ -22,8 +23,9 @@ cp "$(dirname "$0")/cdp_shot.py" "$work/cdp_shot.py"
   "${render[@]}" --ignore-gpu-blocklist --hide-scrollbars --window-size="$w,$h" \
   --remote-debugging-port="$PORT" about:blank >/dev/null 2>&1) &
 edge=$!
+case "$query" in http*) url="$query" ;; *) url="http://localhost:8000/viewer/?$query&_=$(date +%s%N)" ;; esac
 (cd /mnt/c && timeout 100 "$WIN_PYTHON" "$win_temp\\claude-edge-shot\\cdp_shot.py" "$PORT" \
-  "http://localhost:8000/viewer/?$query&_=$(date +%s%N)" "$win_temp\\claude-edge-shot\\shot.png" "$w" "$h") | tr -d '\r'
+  "$url" "$win_temp\\claude-edge-shot\\shot.png" "$w" "$h") | tr -d '\r'
 wait "$edge" || true
 cp "$work/shot.png" "$out"
 echo "WROTE: $out"

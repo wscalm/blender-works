@@ -34,7 +34,9 @@ D_REF, W_MIN, W_MAX = 1.2, 0.35, 2.5
 
 
 def bake_targets():
-    return [o for o in bpy.context.scene.objects if o.type == 'MESH']
+    """焼き付けるメッシュ。カスタムプロパティ bake_skip の付いた物 (キーの光る字など、面のすぐ上に重ねた板) は除く
+    (焼き付けの間は隠す。影を落とさないように)"""
+    return [o for o in bpy.context.scene.objects if o.type == 'MESH' and not o.get("bake_skip")]
 
 
 PAD = 3   # 島と島の間のすき間 (px)。焼き付けの margin で、島の端の色をここへ伸ばす
@@ -66,7 +68,8 @@ def add_lightmap_uvs(objs, size):
     2. 島ごとに、実寸 × 目からの距離の倍率 の大きさの長方形を、全メッシュで1枚の画像に棚詰めする
     見えない面と焼いた光を使わない面は、画像の隅の1点に潰す。
     細すぎて島が1px に満たない物 (針金など。カスタムプロパティ lightmap_proxy = 近くの物の名前) は島を作らず、
-    全体をその近くの物の1点 (_proxy_uv) に潰して、そこの光を借りる。
+    全体をその近くの物の1点 (_proxy_uv) に潰して、そこの光を借りる。借りる点は、物の中心に一番近い点
+    (カスタムプロパティ lightmap_proxy_at = 物のローカル座標の点 があれば、その点に一番近い点。物の中心が暗い奥にある綿棒の束など)。
     布 (カーテン・毛布) のように自分で重ならない展開を持つ物 (カスタムプロパティ lightmap_uv = その UV の名前) は、
     Smart UV Project の代わりにその展開をそのまま島にする (曲面を細かい島に分けると、島の境目が焼き付けの継ぎ目に見えるため)。その UV は最後に消す
     """
@@ -202,9 +205,13 @@ def add_lightmap_uvs(objs, size):
 
 
 def _proxy_uv(obj, src, placed_faces, eye):
-    """細い物 obj に使わせる lightmap の UV: 借りる先 src の焼く面のうち、目の側を向いた面で obj の中心に一番近い点の UV"""
+    """細い物 obj に使わせる lightmap の UV: 借りる先 src の焼く面のうち、目の側を向いた面で obj の中心
+    (lightmap_proxy_at があればその点) に一番近い点の UV"""
     mw = obj.matrix_world
-    target = sum((mw @ v.co for v in obj.data.vertices), Vector()) / len(obj.data.vertices)
+    if "lightmap_proxy_at" in obj:
+        target = mw @ Vector(obj["lightmap_proxy_at"])
+    else:
+        target = sum((mw @ v.co for v in obj.data.vertices), Vector()) / len(obj.data.vertices)
     sw, mesh = src.matrix_world, src.data
     uv = mesh.uv_layers["lightmap"].data
     normal_mat = sw.to_3x3().inverted_safe().transposed()
@@ -383,7 +390,8 @@ def bake_lightmap(size=4096, samples=256, gloss_samples=None):
     bpy.ops.object.join()
     proxy = bpy.context.view_layer.objects.active
     proxy.data.uv_layers.active = proxy.data.uv_layers["lightmap"]   # 焼き先はアクティブな UV (画像ノードの UV ではない)
-    for obj in objs:
+    skipped = [o for o in bpy.context.scene.objects if o.type == 'MESH' and o.get("bake_skip")]
+    for obj in objs + skipped:
         obj.hide_render = True
 
     def bake(img, kind, filters, n):
@@ -401,7 +409,7 @@ def bake_lightmap(size=4096, samples=256, gloss_samples=None):
     bake(gloss, 'GLOSSY', {'DIRECT', 'INDIRECT', 'COLOR'}, gloss_samples or samples)   # 反射は色ごと焼く (そのまま足す)
     bpy.data.objects.remove(proxy)
     bpy.data.objects.remove(cam)
-    for obj in objs:
+    for obj in objs + skipped:
         obj.hide_render = False
 
     t0 = time.time()
